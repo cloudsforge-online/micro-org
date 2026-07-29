@@ -1,0 +1,22 @@
+{
+  "name": "@cloudsforge/org",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "pnpm typecheck && pnpm test",
+    "cfctl": "node --import tsx tools/cfctl.ts",
+    "compat": "node --import tsx tools/compat.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

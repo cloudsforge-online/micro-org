@@ -1,0 +1,158 @@
+name: web-ci
+
+# The one CI file for every CloudsForge frontend.
+#
+# The check that matters here is the last one. The estate resolves API hosts at runtime from
+# window.location, so a single image serves local, staging and production. That property is worth
+# defending explicitly because it is trivially easy to lose — `import.meta.env.VITE_API_URL` is
+# what every Vite tutorial reaches for — and expensive to get back.
+#
+# What is lost with it: the release manifest can no longer pin one image per frontend, because
+# there is no longer one image. Promotion from staging to production stops being promotion and
+# becomes a rebuild, which means the artifact that was tested is not the artifact that ships.
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: The frontend name, as in the registry — 'hub-web', 'site'.
+        required: true
+        type: string
+      node-version:
+        required: false
+        default: '22'
+        type: string
+      package-manager:
+        required: false
+        default: pnpm
+        type: string
+      source-dir:
+        required: false
+        default: src
+        type: string
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+      build-image:
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        if: inputs.package-manager == 'pnpm'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          registry-url: https://npm.pkg.github.com
+          scope: '@cloudsforge'
+      - name: Install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.package-manager }}" = "npm" ]; then npm ci; else pnpm install --frozen-lockfile; fi
+      - name: Typecheck
+        run: ${{ inputs.package-manager }} run typecheck
+      - name: Test
+        run: ${{ inputs.package-manager }} run test
+      - name: Build
+        run: ${{ inputs.package-manager }} run build
+      # A frontend that builds to nothing is a blank page, not a build failure. The previous
+      # estate served SPAs from the API process and shipped an image with no dist in it.
+      - name: The bundle exists
+        run: |
+          test -f dist/index.html || { echo "::error::dist/index.html is missing after a successful build"; exit 1; }
+          echo "ok: $(find dist -type f | wc -l | tr -d ' ') files in dist"
+
+  runtime-hosts:
+    name: One image serves every environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Nothing reads import.meta.env.VITE_*
+        run: |
+          set -uo pipefail
+          hits=$(git grep -nIE 'import\.meta\.env\.VITE_[A-Z0-9_]+' -- . ':!*.md' ':!.github/workflows/*')
+          if [ -n "$hits" ]; then
+            echo "::error::${{ inputs.app }} reads a build-time environment variable:"
+            echo "$hits"
+            echo ""
+            echo "Vite inlines these at build time, so the bundle carries its environment and one image"
+            echo "can no longer serve all of them. Resolve hosts at runtime from window.location"
+            echo "(src/hosts.ts, cloudsforgeHosts()). If this genuinely must be known at build time,"
+            echo "it is a compile-time constant, not an environment variable — write it down as one."
+            exit 1
+          fi
+          echo "ok: no build-time environment variables"
+
+      # The same property from the other side: a build argument that reaches the bundle bakes an
+      # environment into an artifact just as effectively, and is harder to spot in review.
+      - name: The Dockerfile takes no build arguments that reach the bundle
+        run: |
+          set -uo pipefail
+          [ -f "${{ inputs.dockerfile }}" ] || { echo "ok: no Dockerfile"; exit 0; }
+          args=$(grep -nE '^\s*ARG\s+(VITE_|API_|.*_URL)' "${{ inputs.dockerfile }}")
+          if [ -n "$args" ]; then
+            echo "::error::a build argument would bake an environment into the image:"
+            echo "$args"
+            exit 1
+          fi
+          echo "ok: no environment-shaped build arguments"
+
+      # AD-21: product analytics is a service fed by the event bus, pseudonymised by construction.
+      # A crypto platform sending user behaviour to a third-party ad network contradicts the
+      # product's first principle, and a pixel cannot see the server-side funnels anyway.
+      - name: No third-party analytics tag
+        run: |
+          set -uo pipefail
+          hits=$(git grep -nIE 'googletagmanager|google-analytics\.com|gtag\(|segment\.(com|io)/analytics|hotjar|mixpanel' \
+                 -- . ':!*.md' ':!.github/workflows/*')
+          if [ -n "$hits" ]; then
+            echo "::error::a third-party analytics tag:"
+            echo "$hits"
+            echo "Product analytics is micro-analytics, fed by the event bus. AD-21."
+            exit 1
+          fi
+          echo "ok: no third-party tags"
+
+  image:
+    name: Docker image
+    if: inputs.build-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ inputs.app }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The image serves the SPA
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-${{ inputs.app }} -p 127.0.0.1:8080:8080 ${{ inputs.app }}:ci
+          for attempt in $(seq 1 20); do
+            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          [ "${code:-}" = "200" ] || { echo "::error::the image returned ${code:-no answer} for /"; docker logs --tail 60 ci-${{ inputs.app }}; exit 1; }
+          # A deep link must not 404 on a hard refresh; the SPA owns its own routes.
+          deep=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/some/deep/route || true)
+          [ "$deep" = "200" ] || { echo "::error::a deep link returned $deep — try_files is not falling back to index.html"; exit 1; }
+          echo "ok: the SPA is served and deep links resolve"
+      - name: Down
+        if: always()
+        run: docker rm -f ci-${{ inputs.app }} || true

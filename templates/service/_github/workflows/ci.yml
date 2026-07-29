@@ -1,0 +1,27 @@
+name: CI
+
+# The whole file. If this repository ever grows a job of its own, `cfctl doctor` reports it as a
+# bespoke CI file and the count in docs/ecosystem/03 §5 stops being zero — which is the signal
+# that the reusable workflow needs an input, not that this repository needs its own copy.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    uses: __ORG__/micro-org/.github/workflows/service-ci.yml@main
+    with:
+      service: __NAME__
+      database-env-var: __DB_ENV__
+      port: __PORT__
+    permissions:
+      contents: read
+      packages: read
+
+  hygiene:
+    uses: __ORG__/micro-org/.github/workflows/secret-hygiene.yml@main
+    permissions:
+      contents: read

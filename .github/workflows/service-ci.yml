@@ -1,0 +1,296 @@
+name: service-ci
+
+# The one CI file for every CloudsForge service.
+#
+# WHY it is reusable rather than copied: the previous estate had eleven near-identical CI files
+# and they had already drifted — different Node versions, different secret checks, one repository
+# whose image job never ran. With one repository per service that becomes forty copies, and a
+# cross-cutting CI fix becomes forty pull requests. The measured target in
+# docs/ecosystem/03-repository-responsibilities.md §5 is **zero bespoke CI files**, and this is
+# the file that makes zero achievable.
+#
+# The `rules` job below is the other half of the argument. Repository walls used to enforce the
+# boundaries in 03 §2 for free — a service physically could not read another's tables when they
+# were in one tree with one reviewer. Split apart, those boundaries survive only if something
+# checks them. Each check names the failure it prevents, because a rule whose cost is not stated
+# gets argued with at 5pm on a Friday.
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: The service name, as in the registry — 'ledger', 'hub-api'.
+        required: true
+        type: string
+      database-env-var:
+        description: The ONE database variable this service may read. Defaults to <SERVICE>_DATABASE_URL.
+        required: false
+        default: ''
+        type: string
+      port:
+        required: false
+        default: 8080
+        type: number
+      node-version:
+        required: false
+        default: '22'
+        type: string
+      package-manager:
+        description: pnpm or npm. npm only for a repository that genuinely ships a package-lock.json.
+        required: false
+        default: pnpm
+        type: string
+      source-dir:
+        required: false
+        default: src
+        type: string
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+      build-image:
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        if: inputs.package-manager == 'pnpm'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          # GitHub Packages, authenticated by the workflow's own token. The dead NPM_TOKEN
+          # (§3.7) is the root cause of every manual release ritual in the estate; a scoped
+          # registry line here is what lets a service resolve @cloudsforge/* at all.
+          registry-url: https://npm.pkg.github.com
+          scope: '@cloudsforge'
+      - name: Install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.package-manager }}" = "npm" ]; then
+            npm ci
+          else
+            pnpm install --frozen-lockfile
+          fi
+      - name: Typecheck
+        run: ${{ inputs.package-manager }} run typecheck
+      - name: Test
+        run: ${{ inputs.package-manager }} run test
+
+  rules:
+    name: The rules that repository walls used to enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rule 1 — a service owns exactly one database and reads no other.
+      #
+      # The estate's most valuable property is that no service reads another's tables. It held
+      # because it was awkward to break, not because anything stopped you. A second connection
+      # string in a repository is the first step of every distributed monolith ever built, and
+      # once one service reads another's schema, neither can migrate independently again.
+      - name: One database, and only its own
+        env:
+          SERVICE: ${{ inputs.service }}
+          DECLARED: ${{ inputs.database-env-var }}
+        run: |
+          set -uo pipefail
+          src="${{ inputs.source-dir }}"
+          want="$DECLARED"
+          if [ -z "$want" ]; then
+            want="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+          fi
+          [ -d "$src" ] || { echo "::error::${src}/ does not exist"; exit 1; }
+
+          # Every *_DATABASE_URL / *_DB_URL style variable the source reads.
+          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$src" 2>/dev/null | sort -u)
+          others=$(printf '%s\n' "$read_vars" | grep -vx "$want" | grep -v '^$')
+          if [ -n "$others" ]; then
+            echo "::error::${SERVICE} reads a database that is not its own: $(echo "$others" | tr '\n' ' ')"
+            echo "Rule 1: a service owns exactly one database and reads no other. The answer to needing"
+            echo "another service's data is an HTTP call typed by a published contract, never a second DSN."
+            exit 1
+          fi
+
+          # A hard-coded DSN bypasses the variable check entirely, and is also a credential in a
+          # repository. Tests and examples are exempt; they point at throwaway databases.
+          literals=$(grep -rnE '(postgres|postgresql|mysql)://[a-zA-Z0-9_]+:' "$src" 2>/dev/null \
+                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'example')
+          if [ -n "$literals" ]; then
+            echo "::error::a connection string is written into the source:"
+            echo "$literals"
+            exit 1
+          fi
+          echo "ok: reads $want and nothing else"
+
+      # Rule 2 — no service imports another service's source.
+      #
+      # With one repository per service this is physically true on day one. It stops being true
+      # the first time a 'shared helper' is convenient: a path import into a sibling checkout, or
+      # a package in the @cloudsforge scope that is really a service's internals. The answer is a
+      # package in micro-runtime, or duplication. Never a cross-repo path import.
+      - name: No cross-service source imports
+        run: |
+          set -uo pipefail
+          src="${{ inputs.source-dir }}"
+          failed=0
+
+          # A relative import climbing three or more levels has left this repository.
+          escapes=$(grep -rnE "from '(\.\./){3,}" "$src" 2>/dev/null)
+          if [ -n "$escapes" ]; then
+            echo "::error::an import escapes this repository:"
+            echo "$escapes"
+            failed=1
+          fi
+
+          # A path import naming another checkout by name.
+          siblings=$(grep -rnE "from '[^']*(repos|micro)/[a-z0-9-]+/(src|services|packages)" "$src" 2>/dev/null)
+          if [ -n "$siblings" ]; then
+            echo "::error::an import reaches into another repository's checkout:"
+            echo "$siblings"
+            failed=1
+          fi
+
+          # The @cloudsforge scope is for published contracts and runtime libraries only. This
+          # list is the same one in micro-org tools/registry.ts (ALLOWED_SCOPED_PACKAGES); cfctl
+          # doctor checks package.json against it, and this checks the imports.
+          allowed='contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|policy-client|ui|ui-charts|sdk|cli|hearth-node'
+          # Quoted only. An unquoted @cloudsforge/x in prose is a comment naming a package, and a
+          # check that cannot tell those apart is a check people learn to work around by
+          # rewording comments.
+          scoped=$(grep -rhoE "['\"]@cloudsforge/[a-z0-9-]+['\"]" "$src" 2>/dev/null | tr -d "'\"" | sort -u)
+          bad=$(printf '%s\n' "$scoped" | grep -vE "^@cloudsforge/($allowed)$" | grep -v '^$')
+          if [ -n "$bad" ]; then
+            echo "::error::not a published contract or runtime package: $(echo "$bad" | tr '\n' ' ')"
+            echo "A cross-service import wearing a package name is still a cross-service import."
+            failed=1
+          fi
+
+          [ "$failed" = "0" ] || exit 1
+          echo "ok: no cross-service source imports"
+
+      # Rule 4 — every service exposes /livez, /readyz and /metrics.
+      #
+      # Three endpoints because they answer three different questions to three different callers.
+      # A service that serves one /health for all of them cannot be drained: the load balancer
+      # cannot be told to stop sending traffic without the orchestrator also deciding the process
+      # is dead and restarting it mid-drain.
+      - name: /livez, /readyz and /metrics are all served
+        run: |
+          set -uo pipefail
+          src="${{ inputs.source-dir }}"
+          missing=''
+          for route in /livez /readyz /metrics; do
+            grep -rqF "$route" "$src" 2>/dev/null || missing="$missing $route"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::${{ inputs.service }} does not serve:$missing"
+            echo "/livez is static (is the process alive). /readyz checks Postgres, JWKS and every declared"
+            echo "upstream (should it get traffic). /metrics is Prometheus text format. AD-17, rule 4."
+            exit 1
+          fi
+          echo "ok: all three are served"
+
+      # Rule 9 — secrets are per-service, and env_file fan-out is banned.
+      #
+      # The estate's highest-severity finding and close to free to fix: every container received
+      # every secret in the file, so a compromise of the marketing site handed over the custody
+      # master secret. A repository declares the variables it needs; the deploy provides exactly
+      # those.
+      - name: No env_file fan-out
+        run: |
+          set -uo pipefail
+          files=$(git ls-files | grep -E '(docker-)?compose.*\.ya?ml$')
+          [ -n "$files" ] || { echo "ok: no compose files in this repository"; exit 0; }
+          bad=''
+          for file in $files; do
+            hits=$(grep -nE "env_file:\s*\.?/?\.env\s*$|^\s*-\s*\.?/?\.env\s*$" "$file")
+            [ -n "$hits" ] && bad="$bad\n$file:\n$hits"
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::a compose file hands this container the whole estate's .env"
+            printf '%b\n' "$bad"
+            echo "Name the variables, or point at .env.${{ inputs.service }}. Rule 9."
+            exit 1
+          fi
+          echo "ok: no env_file fan-out"
+
+      # Rule 8 — every background timer is a leased job.
+      #
+      # setInterval doing domain work is correct with exactly one replica and wrong with two:
+      # both timers fire, both claim the same work, and for a withdrawal that means two
+      # signatures against one nonce, which loses a payment permanently. The lease key names the
+      # contended resource, not the row.
+      - name: No setInterval doing domain work
+        run: |
+          set -uo pipefail
+          src="${{ inputs.source-dir }}"
+          # A call, not a mention: 'setInterval(' rather than 'setInterval', and never on a line
+          # that is a comment. The rule has to be explainable in a comment without the comment
+          # failing the build.
+          hits=$(grep -rnE 'setInterval\s*\(' "$src" 2>/dev/null \
+                 | grep -vE '\.(test|spec)\.[jt]s' \
+                 | grep -vE ':[0-9]+:\s*(//|\*|/\*)' \
+                 | grep -v 'cfctl-allow setInterval')
+          if [ -n "$hits" ]; then
+            echo "::error::setInterval in ${{ inputs.service }}:"
+            echo "$hits"
+            echo ""
+            echo "Rule 8: background work is a leased job claimed FOR UPDATE SKIP LOCKED"
+            echo "(@cloudsforge/jobs). If this timer genuinely does no domain work — a metrics"
+            echo "flush, a cache sweep — mark the line 'cfctl-allow setInterval' and say why."
+            exit 1
+          fi
+          echo "ok: no unmarked setInterval"
+
+  image:
+    name: Docker image
+    if: inputs.build-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ inputs.service }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # A built image proves the Dockerfile parses. It does not prove the image can start, and
+      # 'container is unhealthy' with no logs is the shape of silent failure this estate has been
+      # bitten by more than once. So: start it, and read the endpoint the load balancer reads.
+      - name: The image starts and answers /livez
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-${{ inputs.service }} -p 127.0.0.1:${{ inputs.port }}:${{ inputs.port }} \
+            -e PORT=${{ inputs.port }} \
+            -e ${{ inputs.database-env-var || 'DATABASE_URL' }}=postgres://ci:ci@127.0.0.1:5432/ci \
+            ${{ inputs.service }}:ci
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${{ inputs.port }}/livez" || true)
+            [ "$code" = "200" ] && { echo "ok: /livez answered after ${attempt}s"; exit 0; }
+            sleep 1
+          done
+          echo "::error::the image never answered /livez"
+          docker logs --tail 60 ci-${{ inputs.service }}
+          exit 1
+      - name: Logs on failure
+        if: failure()
+        run: docker logs --tail 100 ci-${{ inputs.service }} || true
+      - name: Down
+        if: always()
+        run: docker rm -f ci-${{ inputs.service }} || true

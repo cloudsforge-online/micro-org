@@ -1,0 +1,62 @@
+name: CI
+
+# This repository's own CI. It cannot call service-ci.yml — it is not a service, it has no image
+# and no database — so it is the one repository allowed a file of its own. `cfctl doctor` knows:
+# the bespoke-CI check applies to kinds service, web, ops and library, and micro-org is 'org'.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: The machinery works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # The compatibility checker is the only thing standing between an edited contract and a
+      # runtime failure in a repository whose CI never sees the change. Its fixture pairs are the
+      # specification of what 'additive' means.
+      - run: pnpm test
+
+      - name: The tools run
+        run: |
+          set -euo pipefail
+          node --import tsx tools/cfctl.ts list > /dev/null
+          node --import tsx tools/cfctl.ts doctor > /dev/null
+          echo "ok: cfctl list and doctor run"
+
+      # A reusable workflow that does not parse is discovered by the repository that calls it,
+      # which is the worst place to discover it: somebody else's red build, for a change they did
+      # not make.
+      - name: Every reusable workflow parses
+        run: |
+          set -euo pipefail
+          for file in .github/workflows/*.yml; do
+            docker run --rm -v "$PWD:/w" -w /w mikefarah/yq:4 '.' "$file" > /dev/null
+            echo "ok: $file"
+          done
+
+      # Renovate reads this file on behalf of forty-three repositories. A preset that does not
+      # parse means every one of them silently stops receiving contract bumps — the first
+      # measured mitigation failing with no alarm attached to it.
+      - name: The Renovate preset is valid JSON
+        run: |
+          node -e 'JSON.parse(require("fs").readFileSync("renovate.json","utf8"))'
+          echo "ok: renovate.json parses"
+
+  hygiene:
+    uses: ./.github/workflows/secret-hygiene.yml
+    with:
+      require-dockerignore: false
+    permissions:
+      contents: read

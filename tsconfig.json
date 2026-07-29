@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["tools/**/*.ts", "test/**/*.ts"],
+  // The fixtures are inputs to the compatibility checker, not sources of this repository. Several
+  // of them declare the same type name with a deliberately different shape, and one pair exists
+  // only to be rejected. Compiling them here would say nothing about whether the checker works.
+  "exclude": ["test/fixtures/**"]
+}

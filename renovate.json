@@ -1,0 +1,182 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "The CloudsForge organisation preset. Every repository extends it with a two-line renovate.json:",
+    "  { \"$schema\": \"https://docs.renovatebot.com/renovate-schema.json\",",
+    "    \"extends\": [\"github>cloudsforge-online/micro-org\"] }",
+    "",
+    "WHY this is load-bearing rather than tidy. AD-01 costs a contract minor bump ~48 file edits",
+    "across 43 repositories. Nobody does that by hand, so in practice nobody bumps, so consumers",
+    "drift, so the contract stops being a contract. Renovate is what replaces those 48 edits, and",
+    "it is one of the three measured mitigations in docs/ecosystem/03 §5: time from a contract",
+    "publish to the last consumer being on it, target under 24 hours unattended. If it exceeds a",
+    "week, the repository topology is failing and should be revisited rather than endured."
+  ],
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Europe/London",
+  "schedule": ["* 0-6 * * *"],
+  "prHourlyLimit": 6,
+  "prConcurrentLimit": 12,
+  "npmrc": "@cloudsforge:registry=https://npm.pkg.github.com\n",
+  "packageRules": [
+    {
+      "description": [
+        "First-party packages auto-merge on green CI. This is the rule that makes the polyrepo",
+        "work: a contract publish reaches every consumer without a human, and the thing that",
+        "makes it safe to do unattended is contract-compat.yml — a bump that would break a",
+        "consumer cannot be published in the first place, and the consumer's own CI is the second",
+        "gate. Auto-merge without those two checks would be reckless; with them it is the point."
+      ],
+      "matchPackageNames": ["@cloudsforge/**"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "platformAutomerge": true,
+      "minimumReleaseAge": null,
+      "schedule": ["at any time"],
+      "prPriority": 10
+    },
+    {
+      "description": [
+        "minimumReleaseAgeExclude, and why first-party packages are exempt from the 7-day gate.",
+        "",
+        "pnpm-workspace.yaml in every repository sets `minimumReleaseAge: 10080` — a third-party",
+        "package must be a week old before install will take it. It is a supply-chain control: a",
+        "malicious version published an hour ago is the shape most registry attacks take, and",
+        "none of them survive a week of being looked at.",
+        "",
+        "Applying that to @cloudsforge/* would make the polyrepo unworkable. Publishing a contract",
+        "fix and then waiting seven days before any of 43 consumers can install it turns a",
+        "one-hour fix into a one-week fix, and turns the 24-hour propagation target into a number",
+        "that is unreachable by construction. So every repository carries:",
+        "",
+        "  minimumReleaseAgeExclude:",
+        "    - '@cloudsforge/*'",
+        "",
+        "The exemption is safe for the reason the gate exists: the gate defends against a",
+        "third-party maintainer being compromised. A first-party package's supply chain is this",
+        "organisation's own branch protection, required reviews and publish workflow — the same",
+        "controls that guard the service consuming it. Waiting a week adds no defence and removes",
+        "the ability to ship.",
+        "",
+        "Renovate maintains that exclusion list rather than a person remembering to. `minimumReleaseAge:",
+        "null` on the rule above is the same statement to Renovate itself: do not hold our own",
+        "releases back. A new @cloudsforge/* package added to the estate needs no ritual."
+      ],
+      "matchPackageNames": ["@cloudsforge/**"],
+      "matchManagers": ["npm"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": [
+        "One pull request per contract package, across every consumer of it. Grouping per package",
+        "rather than per repository is deliberate: a contracts-money bump is one reviewable event",
+        "with one blast radius, and reviewing it 43 times teaches everybody to rubber-stamp."
+      ],
+      "matchPackageNames": ["@cloudsforge/contracts-**"],
+      "groupName": "contract {{depName}}",
+      "groupSlug": "contract-{{depNameSanitized}}",
+      "commitMessageTopic": "contract {{depName}}",
+      "semanticCommitType": "feat",
+      "semanticCommitScope": "contracts"
+    },
+    {
+      "description": [
+        "The runtime libraries move together — telemetry, http, jobs, auth, db, lifecycle. They",
+        "exist to replace six byte-identical copies of obs.ts and five divergent auth middlewares,",
+        "and they change together, so bumping them separately would reintroduce the divergence."
+      ],
+      "matchPackageNames": [
+        "@cloudsforge/telemetry",
+        "@cloudsforge/http",
+        "@cloudsforge/jobs",
+        "@cloudsforge/auth",
+        "@cloudsforge/db",
+        "@cloudsforge/lifecycle",
+        "@cloudsforge/policy-client"
+      ],
+      "groupName": "cloudsforge runtime"
+    },
+    {
+      "description": [
+        "@cloudsforge/contracts-chain is EXACT-PINNED and never auto-merged. RATE_SCALE,",
+        "shardsForCoinAmount() and the per-coin confirmation depths must agree byte-for-byte",
+        "between wallet, settlement, custody and indexer. Two services on two versions credits",
+        "money at the wrong confirmation depth or at the wrong scale, and that is a class of bug",
+        "that is discovered by a customer. Same rule for the chain node package, which custody",
+        "pins for signature correctness."
+      ],
+      "matchPackageNames": ["@cloudsforge/contracts-chain", "@cloudsforge/hearth-node"],
+      "rangeStrategy": "pin",
+      "automerge": false,
+      "addLabels": ["needs-coordinated-release"],
+      "prPriority": 20
+    },
+    {
+      "description": [
+        "Third-party production dependencies: never auto-merged, and never taken before the",
+        "release-age gate. A patch bump on a transitive dependency is the most common delivery",
+        "vehicle for a compromised package."
+      ],
+      "matchDepTypes": ["dependencies"],
+      "matchPackageNames": ["!@cloudsforge/**"],
+      "automerge": false,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": [
+        "Third-party development tooling: grouped, weekly, auto-merged on green CI, and still",
+        "behind the release-age gate. These do not reach production, and forty-three repositories",
+        "each opening a separate typescript patch PR is noise that trains people to ignore",
+        "Renovate entirely — which is how the contract bumps get ignored too."
+      ],
+      "matchDepTypes": ["devDependencies"],
+      "matchPackageNames": ["!@cloudsforge/**"],
+      "groupName": "development tooling",
+      "schedule": ["before 6am on monday"],
+      "automerge": true,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": [
+        "Node itself moves on its own schedule, with a human, because it changes the runtime every",
+        "service and every image shares."
+      ],
+      "matchPackageNames": ["node", "@types/node"],
+      "matchManagers": ["npm", "dockerfile", "github-actions"],
+      "automerge": false,
+      "addLabels": ["runtime"]
+    },
+    {
+      "description": [
+        "Actions are pinned to a tag rather than a digest deliberately: the reusable workflows in",
+        "micro-org are the single place a bad action version has to be fixed, so the blast radius",
+        "is already one repository."
+      ],
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "automerge": true,
+      "minimumReleaseAge": "7 days"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "description": [
+      "A security fix jumps every queue, every schedule and every grouping. It is the one case",
+      "where the release-age gate is the wrong trade: the vulnerability is already public."
+    ],
+    "enabled": true,
+    "minimumReleaseAge": null,
+    "schedule": ["at any time"],
+    "prPriority": 100,
+    "addLabels": ["security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"],
+    "automerge": true
+  }
+}

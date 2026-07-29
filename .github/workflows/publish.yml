@@ -1,0 +1,111 @@
+name: publish
+
+# Publish to GitHub Packages, authenticated with the workflow's own GITHUB_TOKEN.
+#
+# This is AD-02 item 1, and it is the single fix with the largest downstream effect in the whole
+# programme. The estate's NPM_TOKEN is dead, so nothing has published for months, so every
+# consumer carries a workspace link or a vendored copy, so a contract change is a hand edit in
+# every repository that uses it. Every manual release ritual in the estate traces back to this
+# one broken credential.
+#
+# GITHUB_TOKEN needs no rotation, no secret to leak and no owner to be available. `packages:
+# write` on this workflow is the entire configuration.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        required: false
+        default: '22'
+        type: string
+      package-manager:
+        required: false
+        default: pnpm
+        type: string
+      dry-run:
+        description: Resolve and pack, but do not publish. Use it on pull requests.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        if: inputs.package-manager == 'pnpm'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          registry-url: https://npm.pkg.github.com
+          scope: '@cloudsforge'
+
+      - name: Install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.package-manager }}" = "npm" ]; then npm ci; else pnpm install --frozen-lockfile; fi
+
+      - name: Build
+        run: ${{ inputs.package-manager }} run build
+
+      # AD-02 item 2. A caret range on a 0.x version resolves patches only, which is exactly why
+      # no consumer can resolve the current contract version. Publishing another 0.x would put
+      # the estate straight back where it started, and Renovate could not bump anything.
+      - name: Nothing publishes at 0.x
+        run: |
+          set -uo pipefail
+          offenders=''
+          while IFS= read -r manifest; do
+            private=$(node -p "require('./$manifest').private === true" 2>/dev/null || echo false)
+            [ "$private" = "true" ] && continue
+            name=$(node -p "require('./$manifest').name || ''")
+            version=$(node -p "require('./$manifest').version || ''")
+            case "$name" in @cloudsforge/*) ;; *) continue ;; esac
+            case "$version" in 0.*) offenders="$offenders $name@$version" ;; esac
+          done < <(git ls-files '**/package.json' 'package.json')
+          if [ -n "$offenders" ]; then
+            echo "::error::these would publish at 0.x:$offenders"
+            echo "A caret range on 0.x is patch-only, so no consumer can take a minor and Renovate"
+            echo "cannot bump one. Contract packages go to 1.0.0 and evolve additively. AD-02 item 2."
+            exit 1
+          fi
+          echo "ok: nothing is on 0.x"
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          extra=''
+          if [ "${{ inputs.dry-run }}" = "true" ]; then extra='--dry-run'; fi
+          if [ "${{ inputs.package-manager }}" = "npm" ]; then
+            npm publish $extra
+          else
+            # --no-git-checks: the tag that triggered this run is the git state, and pnpm's
+            # default check refuses to publish from a detached HEAD, which is what a tag build is.
+            pnpm publish -r --no-git-checks --access restricted $extra
+          fi
+
+      # The 403 trap: a package inherits the visibility of the repository that first published
+      # it, so a package published from a private repository 403s for every consumer whose token
+      # cannot read that repository — at pull time, not at publish time, in somebody else's CI.
+      - name: Say so if the package is not publicly readable
+        if: ${{ !inputs.dry-run }}
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          name=$(node -p "require('./package.json').name || ''")
+          [ -n "$name" ] || exit 0
+          code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "https://npm.pkg.github.com/${name}")
+          if [ "$code" != "200" ]; then
+            echo "::warning::${name} is not anonymously readable (HTTP $code). Consumers whose token"
+            echo "cannot read this repository will get a 403 on install. GitHub -> Packages ->"
+            echo "${name} -> Package settings -> Change visibility."
+          fi

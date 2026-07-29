@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    uses: __ORG__/micro-org/.github/workflows/web-ci.yml@main
+    with:
+      app: __NAME__
+    permissions:
+      contents: read
+      packages: read
+
+  hygiene:
+    uses: __ORG__/micro-org/.github/workflows/secret-hygiene.yml@main
+    permissions:
+      contents: read

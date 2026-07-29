@@ -1,0 +1,96 @@
+name: contract-compat
+
+# Rule 10 of docs/ecosystem/03 §2, and AD-02 item 4: contracts evolve additively, and that is
+# enforced by a check rather than by discipline — §3.7 of the current-state audit shows
+# discipline already failed at it.
+#
+# WHY it cannot be left to review: a contract package is consumed by repositories whose CI never
+# sees this change. A removed field compiles fine here and fails over there, at runtime, in a
+# repository nobody is looking at, days later. This job is the only place in the whole topology
+# where both sides of that are visible at once.
+#
+# What it permits is the design: a service may lag a contract by up to two minors, and the
+# additive-only guarantee is what makes that safe.
+
+on:
+  workflow_call:
+    inputs:
+      base-ref:
+        description: The ref to compare against. The merge base on a pull request; the previous tag on a release.
+        required: false
+        default: ''
+        type: string
+      packages-dir:
+        required: false
+        default: packages
+        type: string
+      node-version:
+        required: false
+        default: '22'
+        type: string
+
+jobs:
+  compat:
+    name: Contracts evolve additively
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the checker reads the package as it was at the base ref, and a shallow
+      # clone does not have it. A silently-passing check is worse than no check.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The checker lives in micro-org so that one implementation serves every contract
+      # repository. Pinned to a ref, not a branch, for the same reason contracts-chain is
+      # exact-pinned: a compatibility checker that changes under you re-judges yesterday's PR.
+      - name: Fetch the checker
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/micro-org
+          ref: main
+          path: .cfctl
+          sparse-checkout: |
+            tools
+            package.json
+            tsconfig.base.json
+
+      - name: Install the checker
+        working-directory: .cfctl
+        run: pnpm install --frozen-lockfile
+
+      - name: Compare every package against the base ref
+        run: |
+          set -uo pipefail
+          base="${{ inputs.base-ref }}"
+          if [ -z "$base" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              base="origin/${{ github.base_ref }}"
+            else
+              base="${{ github.event.before }}"
+            fi
+          fi
+          echo "comparing against $base"
+
+          failed=0
+          for dir in ${{ inputs.packages-dir }}/*/; do
+            [ -f "${dir}package.json" ] || continue
+            echo "::group::${dir}"
+            node --import tsx .cfctl/tools/compat.ts "$dir" "$base" || failed=1
+            echo "::endgroup::"
+          done
+
+          if [ "$failed" != "0" ]; then
+            echo "::error::a contract changed in a way a consumer cannot survive."
+            echo "Additive-only means: add a field alongside the old one and deprecate the old one in a"
+            echo "comment. Removing it is a major version, and a major version of a contract package is a"
+            echo "coordinated release across every consumer — which is the thing this topology cannot do."
+            exit 1
+          fi
