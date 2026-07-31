@@ -62,6 +62,33 @@ test('a skipped database suite fails the build rather than passing quietly', () 
   assert.match(WORKFLOW, /grep -qiE 'set \[A-Z_\]\*TEST_DATABASE_URL\|database tests are disabled'/)
 })
 
+/* ------------------------------ the sibling runtime ------------------------------- */
+
+/** The build job, sliced out so its checkout layout can be asserted. */
+const BUILD_JOB = WORKFLOW.slice(WORKFLOW.indexOf('\n  build:'), WORKFLOW.indexOf('\n  rules:'))
+
+test('the build job checks out the runtime and contracts as siblings, because link: needs them', () => {
+  // @cloudsforge/* is resolved by link:../runtime/packages/*, not a registry — the npm scope
+  // @cloudsforge does not match the org cloudsforge-online, so GitHub Packages cannot host it, and
+  // a link: with no sibling on disk installs as a dangling symlink that resolves to nothing. That
+  // is why Install passed and Typecheck could not find one @cloudsforge module. The fix is the
+  // sibling layout the bespoke workflows used.
+  assert.match(BUILD_JOB, /repository: cloudsforge-online\/micro-runtime/)
+  assert.match(BUILD_JOB, /repository: cloudsforge-online\/micro-contracts/)
+  assert.match(BUILD_JOB, /with: \{ path: service \}/)
+})
+
+test('the siblings are installed before the service, and the service steps run in its subdir', () => {
+  // link: resolves to a sibling's OWN node_modules, so the sibling must be installed first.
+  assert.match(BUILD_JOB, /pnpm --dir runtime install --frozen-lockfile/)
+  assert.match(BUILD_JOB, /working-directory: service/)
+})
+
+test('the private sibling repos are reached with a token that falls back to the job token', () => {
+  assert.match(WORKFLOW, /secrets:\s*\n\s*estate_token:/)
+  assert.match(WORKFLOW, /token: \$\{\{ secrets\.estate_token \|\| github\.token \}\}/)
+})
+
 /* ------------------------------ the image smoke test ------------------------------- */
 
 /** The image job, sliced out so its shell can be asserted the same way the test job's is. */
@@ -84,6 +111,14 @@ test('the image is migrated by its own one-shot migrator before /livez is polled
   assert.match(IMAGE_JOB, /docker run --rm --network host[^\n]*\$MIGRATE/, 'the migrator must run in the image')
   assert.match(WORKFLOW, /migrate-command:/)
   assert.match(WORKFLOW, /default: node --import tsx src\/migrator\.ts/)
+})
+
+test('the image build gets the runtime and contracts as named build contexts', () => {
+  // The Dockerfiles resolve their link: deps with COPY --from=runtimepkgs; without the context the
+  // build fails at the first COPY — the image half of the link:-has-no-sibling defect.
+  assert.match(IMAGE_JOB, /build-contexts:/)
+  assert.match(IMAGE_JOB, /runtimepkgs=\$\{\{ github\.workspace \}\}\/runtime-ctx/)
+  assert.match(IMAGE_JOB, /repository: cloudsforge-online\/micro-runtime/)
 })
 
 test('the service\'s declared configuration reaches the smoke container', () => {

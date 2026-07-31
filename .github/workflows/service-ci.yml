@@ -87,6 +87,17 @@ on:
         required: false
         default: ''
         type: string
+    secrets:
+      estate_token:
+        description: >-
+          A token with `contents:read` on micro-runtime and micro-contracts, so this workflow can
+          check them out as siblings. The estate resolves @cloudsforge/* through `link:../runtime`
+          rather than a registry — the npm scope (@cloudsforge) does not match the GitHub org
+          (cloudsforge-online), so GitHub Packages cannot host these packages, and every service
+          therefore consumes the runtime as a sibling checkout the way the bespoke workflows did.
+          A caller passes it with `secrets: inherit`. Falls back to the job token, which succeeds
+          only if the sibling repositories are public.
+        required: false
 
 jobs:
   build:
@@ -120,22 +131,53 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+    # ────────────────────────────────────────────────────────────────────────────────────────────
+    # THE SERVICE AND THE RUNTIME ARE SIBLINGS, because @cloudsforge/* is resolved by
+    # `link:../runtime/packages/*`, not by a registry.
+    #
+    # This workflow first tried a single checkout with a scoped GitHub Packages registry — the clean
+    # end state, and unreachable today: the npm scope is @cloudsforge and the GitHub org is
+    # cloudsforge-online, and GitHub Packages will only host a scope that matches the org, so nothing
+    # can be published there. A `link:` dependency, meanwhile, is a symlink to a path — with no
+    # sibling on disk it installs as a DANGLING link that resolves to nothing, which is why `Install`
+    # passed and `Typecheck` then could not find a single @cloudsforge module. Every service in the
+    # estate is built this way, so the workflow could not have typechecked any of them.
+    #
+    # So the service goes in `service/`, the runtime and contracts beside it, and the siblings are
+    # installed FIRST — `link:` resolves to the sibling's own node_modules, which must therefore
+    # exist before the service install runs.
+    # ────────────────────────────────────────────────────────────────────────────────────────────
     steps:
       - uses: actions/checkout@v4
+        with: { path: service }
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-runtime
+          path: runtime
+          token: ${{ secrets.estate_token || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-contracts
+          path: contracts
+          token: ${{ secrets.estate_token || github.token }}
       - uses: pnpm/action-setup@v4
         if: inputs.package-manager == 'pnpm'
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
-          # GitHub Packages, authenticated by the workflow's own token. The dead NPM_TOKEN
-          # (§3.7) is the root cause of every manual release ritual in the estate; a scoped
-          # registry line here is what lets a service resolve @cloudsforge/* at all.
-          registry-url: https://npm.pkg.github.com
-          scope: '@cloudsforge'
+          cache-dependency-path: service/pnpm-lock.yaml
+      - name: Install the sibling runtime and contracts
+        # `link:` resolves to a sibling's OWN node_modules, so the siblings must be installed before
+        # the service is. This is the price of `link:`, and it is the same order the bespoke
+        # workflows used before this one existed.
+        if: inputs.package-manager == 'pnpm'
+        run: |
+          set -euo pipefail
+          [ -f runtime/pnpm-lock.yaml ] && pnpm --dir runtime install --frozen-lockfile
+          [ -f contracts/pnpm-lock.yaml ] && pnpm --dir contracts install --frozen-lockfile
       - name: Install
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: service
         run: |
           if [ "${{ inputs.package-manager }}" = "npm" ]; then
             npm ci
@@ -143,9 +185,11 @@ jobs:
             pnpm install --frozen-lockfile
           fi
       - name: Typecheck
+        working-directory: service
         run: ${{ inputs.package-manager }} run typecheck
 
       - name: Test
+        working-directory: service
         # The DSN is exported under the service's OWN variables, resolved exactly as the `rules`
         # job resolves them. A generic DATABASE_URL alone would not do: every suite in this estate
         # reads `<SERVICE>_TEST_DATABASE_URL` and skips when it is absent.
@@ -452,12 +496,30 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      # The runtime and contracts are checked out as NAMED BUILD CONTEXTS, not into the source tree:
+      # the estate's Dockerfiles resolve their `link:` dependencies with `COPY --from=runtimepkgs`
+      # (and, where a service uses money contracts, `--from=contractspkgs`). Without them the build
+      # fails at the first COPY — the image half of the same `link:`-has-no-sibling defect the build
+      # job hit. Passing a context the Dockerfile does not reference is harmless.
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-runtime
+          path: runtime-ctx
+          token: ${{ secrets.estate_token || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-contracts
+          path: contracts-ctx
+          token: ${{ secrets.estate_token || github.token }}
       - uses: docker/setup-buildx-action@v3
       - name: Build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ inputs.dockerfile }}
+          build-contexts: |
+            runtimepkgs=${{ github.workspace }}/runtime-ctx
+            contractspkgs=${{ github.workspace }}/contracts-ctx
           push: false
           load: true
           tags: ${{ inputs.service }}:ci
