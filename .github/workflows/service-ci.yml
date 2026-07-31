@@ -52,11 +52,54 @@ on:
         required: false
         default: true
         type: boolean
+      postgres:
+        description: >-
+          Start a Postgres service container for the test job and export its DSN as this service's
+          declared database variable. Default true, because fifteen of the estate's services have
+          database-backed suites and this workflow shipped without any way to run them — every one
+          of those repositories would have had a CI that could not execute its own tests. A service
+          with genuinely no database sets this false and pays nothing.
+        required: false
+        default: true
+        type: boolean
+      postgres-version:
+        description: Must match production. A suite that passes on a version nobody runs proves nothing.
+        required: false
+        default: '16'
+        type: string
 
 jobs:
   build:
     name: Typecheck, test, build
     runs-on: ubuntu-latest
+
+    # The suites in this estate test against a real Postgres deliberately — deferred constraint
+    # triggers, `FOR UPDATE SKIP LOCKED` leases and advisory locks are the things most worth
+    # proving, and not one of them exists in a fake. A workflow with no database could therefore
+    # run only the suites that prove the least.
+    services:
+      postgres:
+        # A service container has no `if:`. An EMPTY image is the supported way to declare one
+        # conditionally — the runner skips a service whose image expression evaluates to '', so a
+        # service that sets `postgres: false` starts no container and waits for nothing.
+        image: ${{ inputs.postgres && format('postgres:{0}', inputs.postgres-version) || '' }}
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          # `ci_test`, not `ci`. Every testsupport.ts in the estate refuses a DSN whose name does
+          # not match /test/i — a deliberate guard against a suite that truncates tables pointing
+          # at something real. A database called `ci` would be rejected by that guard and the
+          # suite would skip, which is the failure this whole block exists to end.
+          POSTGRES_DB: ci_test
+        ports: ['5432:5432']
+        # Without this the first test connects before Postgres is accepting, and the failure looks
+        # like a flaky suite rather than a race with the container.
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -81,8 +124,53 @@ jobs:
           fi
       - name: Typecheck
         run: ${{ inputs.package-manager }} run typecheck
+
       - name: Test
-        run: ${{ inputs.package-manager }} run test
+        # The DSN is exported under the service's OWN variables, resolved exactly as the `rules`
+        # job resolves them. A generic DATABASE_URL alone would not do: every suite in this estate
+        # reads `<SERVICE>_TEST_DATABASE_URL` and skips when it is absent.
+        #
+        # THAT SKIP IS WHY THIS STEP IS SHAPED LIKE THIS. Before the service container existed,
+        # the variable was never set, so every database-backed test in fifteen services skipped
+        # and CI went green. Green while proving nothing is materially worse than red: the estate
+        # believed its ledger's deferred constraints, its custody overdraft trigger and its
+        # settlement lease were covered by CI, and not one of those assertions had executed there.
+        # So the run is checked for the skip afterwards and the build fails if it happened.
+        env:
+          CI_DSN: postgres://ci:ci@127.0.0.1:5432/ci_test
+          SERVICE: ${{ inputs.service }}
+          DECLARED: ${{ inputs.database-env-var }}
+          NEEDS_DB: ${{ inputs.postgres }}
+        run: |
+          set -uo pipefail
+          if [ "$NEEDS_DB" = "true" ]; then
+            want="$DECLARED"
+            if [ -z "$want" ]; then
+              want="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+            fi
+            # The suite's variable is the declared one with _TEST_ in it: LEDGER_DATABASE_URL ->
+            # LEDGER_TEST_DATABASE_URL. Both are exported, because migration helpers read the
+            # first and testsupport.ts reads the second.
+            test_var="${want/_DATABASE_URL/_TEST_DATABASE_URL}"
+            echo "database exported as ${want} and ${test_var}"
+            export "$want=$CI_DSN"
+            export "$test_var=$CI_DSN"
+            export DATABASE_URL="$CI_DSN"
+          fi
+
+          set -o pipefail
+          ${{ inputs.package-manager }} run test 2>&1 | tee /tmp/test-output.txt
+          status=$?
+
+          if [ "$NEEDS_DB" = "true" ]; then
+            if grep -qiE 'set [A-Z_]*TEST_DATABASE_URL|database tests are disabled' /tmp/test-output.txt; then
+              echo "::error::the database-backed tests SKIPPED — CI would have gone green without running them"
+              echo "The suite could not see a usable DSN. It must contain 'test' in the database name;"
+              echo "check that this service reads <SERVICE>_TEST_DATABASE_URL and that inputs.service matches."
+              exit 1
+            fi
+          fi
+          exit $status
 
   rules:
     name: The rules that repository walls used to enforce
@@ -110,8 +198,54 @@ jobs:
           [ -d "$src" ] || { echo "::error::${src}/ does not exist"; exit 1; }
 
           # Every *_DATABASE_URL / *_DB_URL style variable the source reads.
-          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$src" 2>/dev/null | sort -u)
-          others=$(printf '%s\n' "$read_vars" | grep -vx "$want" | grep -v '^$')
+          #
+          # Comment bodies are stripped first. The check used to grep raw source, so writing
+          # `LEDGER_DATABASE_URL` inside a comment explaining why this service does NOT read the
+          # ledger's database failed the build — the rule fired on its own rationale. That is the
+          # same defect the web template's nginx guard had, and it has the same consequence:
+          # engineers learn to delete the explanation rather than write it, and the codebase loses
+          # precisely the comments that make a boundary survive a reviewer who was not there when
+          # it was drawn. A rule that punishes documenting the rule is worse than no rule.
+          # MULTI-LINE blocks matter more than line comments here: this estate documents every
+          # boundary in a `/** ... */` header, which is exactly where a sibling service's variable
+          # name gets written down. A stripper that only handled `//` would miss the common case.
+          strip_comments() {
+            awk '
+              { line = $0; out = ""
+                while (length(line) > 0) {
+                  if (inblock) {
+                    i = index(line, "*/")
+                    if (i == 0) { line = ""; break }
+                    inblock = 0; line = substr(line, i + 2); continue
+                  }
+                  b = index(line, "/*"); l = index(line, "//")
+                  if (l > 0 && (b == 0 || l < b)) { out = out substr(line, 1, l - 1); line = ""; break }
+                  if (b > 0) { out = out substr(line, 1, b - 1); line = substr(line, b + 2); inblock = 1; continue }
+                  out = out line; line = ""
+                }
+                print out
+              }' "$1"
+          }
+
+          stripped=$(mktemp -d)
+          while IFS= read -r f; do
+            mkdir -p "$stripped/$(dirname "$f")"
+            strip_comments "$f" > "$stripped/$f"
+          done < <(find "$src" -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \) -print)
+
+          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$stripped" 2>/dev/null | sort -u)
+          # A service's own TEST database is its own database. The check compared against `$want`
+          # by exact string, so `LEDGER_TEST_DATABASE_URL` — which every testsupport.ts in the
+          # estate reads, by construction — counted as "another service's database" and failed the
+          # build. Rule 1 as written rejected all fifteen services it was meant to protect, and
+          # nobody had noticed because no repository's CI had run this workflow yet.
+          #
+          # The rule's actual intent is a PREFIX question: does this source read a database
+          # belonging to a service that is not this one? So the comparison is on the namespace.
+          prefix="${want%_DATABASE_URL}"
+          others=$(printf '%s\n' "$read_vars" \
+                   | grep -vxE "${prefix}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)" \
+                   | grep -v '^$')
           if [ -n "$others" ]; then
             echo "::error::${SERVICE} reads a database that is not its own: $(echo "$others" | tr '\n' ' ')"
             echo "Rule 1: a service owns exactly one database and reads no other. The answer to needing"
