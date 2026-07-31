@@ -130,6 +130,14 @@ test('rule 1 reads code, not prose', () => {
   )
 })
 
+test('rule 1 does not scan test files, which is where a foreign name is legitimately written', () => {
+  // A test that proves a service IGNORES another service's DSN has to name it. micro-market's did,
+  // and had to assemble it from ['LEDGER','DATABASE','URL'].join('_') to get past this check — the
+  // rule forced a test that agrees with the rule to obscure its own assertion. The hard-coded-DSN
+  // check in the same workflow had always exempted tests; this one had not.
+  assert.match(WORKFLOW, /! -name '\*\.test\.\*' ! -name '\*\.spec\.\*'/)
+})
+
 /* -------------------------- secret hygiene --------------------------- */
 
 const HYGIENE = readFileSync(

@@ -227,11 +227,18 @@ jobs:
               }' "$1"
           }
 
+          # Test files are excluded, exactly as the hard-coded-DSN check below already excludes
+          # them. A test is where a service legitimately NAMES another service's variable — to
+          # prove it is ignored. micro-market has precisely that test, and had to assemble the name
+          # from `['LEDGER','DATABASE','URL'].join('_')` to get past this check: the rule forced a
+          # test that agrees with the rule to obscure what it asserts. Two of the three defects
+          # found in this file were this same shape, a check that reads text rather than meaning.
           stripped=$(mktemp -d)
           while IFS= read -r f; do
             mkdir -p "$stripped/$(dirname "$f")"
             strip_comments "$f" > "$stripped/$f"
-          done < <(find "$src" -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \) -print)
+          done < <(find "$src" -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \) \
+                     ! -name '*.test.*' ! -name '*.spec.*' -print)
 
           read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$stripped" 2>/dev/null | sort -u)
           # A service's own TEST database is its own database. The check compared against `$want`
