@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -183,5 +183,54 @@ test('a package that genuinely did not exist at the base ref passes, and is not 
     assert.throws(() => checkoutPackageAtRef(realpathSync(root), 'packages/money', 'no-such-ref'));
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/* --------------------------- the checker's own resolution ---------------------------- */
+
+test("a package's OWN node_modules is linked, not just the workspace root's", () => {
+  // The defect: in a pnpm workspace the root holds hoisted tooling and a package's real
+  // dependencies — including the sibling contract packages whose types matter most here — live in
+  // `packages/<name>/node_modules`. Linking only the root left the BASE side unable to resolve
+  // them, so every type that flowed through a sibling degraded to `any` and the head side's real
+  // types all read as `type-changed`: "AssetCode was scalar (any), is now union". That is a
+  // breaking verdict on code nobody touched, on the one check standing between a removed contract
+  // field and a runtime break in a consumer whose CI never sees the change.
+  const root = scratchRepo();
+  try {
+    const real = realpathSync(root);
+    mkdirSync(path.join(real, 'node_modules'), { recursive: true });
+    mkdirSync(path.join(real, 'packages', 'money', 'node_modules', 'dep'), { recursive: true });
+
+    const found = checkoutPackageAtRef(real, 'packages/money', 'HEAD');
+    assert.ok(found, 'expected the package to be found at HEAD');
+    // The scratch checkout must see the package's own dependency, reached through the link.
+    assert.ok(
+      existsSync(path.join(found.packageDir, 'node_modules', 'dep')),
+      "the package's own node_modules was not linked into the checkout",
+    );
+    found.cleanup();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('well-known symbol members are not surface — their names carry an unstable compiler id', () => {
+  // TypeScript spells these `__@unscopables@1100`, where the number is its internal symbol id for
+  // THAT compilation. It moves whenever anything upstream changes, so identical code compared
+  // against itself produced matched `removed`/`added` pairs — hundreds of them on one readonly
+  // array constant, every one judged breaking. No consumer can read them either; they are
+  // Array.prototype's plumbing.
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfcompat-sym-'));
+  try {
+    const file = path.join(dir, 'index.ts');
+    writeFileSync(file, "export const ENTRY_KINDS = ['debit', 'credit'] as const\n");
+    const surface = surfaceOfEntry(file);
+    const symbolish = [...surface.entries.keys()].filter((key) => key.includes('__@'));
+    assert.deepEqual(symbolish, [], `well-known symbol members leaked into the surface: ${symbolish.join(', ')}`);
+    // The real surface is still there — this must not be a blanket mute.
+    assert.ok([...surface.entries.keys()].some((key) => key.startsWith('ENTRY_KINDS')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

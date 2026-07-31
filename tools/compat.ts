@@ -26,7 +26,16 @@
 // tag fixes; getting it wrong the other way ships a break, so the suffix list is generous.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
@@ -216,6 +225,15 @@ function walk(
     });
     const nextSeen = new Set([...seen, id]);
     for (const property of [...properties].sort((a, b) => a.name.localeCompare(b.name))) {
+      // Well-known symbol members are not surface, and worse, their names are NOT STABLE: the
+      // checker spells them `__@unscopables@1100`, where the trailing number is TypeScript's
+      // internal symbol id for that compilation. It shifts whenever anything upstream of it
+      // changes, so identical code compared against itself produced a matched pair of
+      // `__@iterator@55 removed` / `__@iterator@1059 added` findings — hundreds of them, on a
+      // readonly array constant, every one breaking. A check that is red on unchanged code is a
+      // check that gets bypassed, and this one guards the estate's contracts. No consumer can
+      // read `ENTRY_KINDS.__@unscopables@1100` in any case: it is Array.prototype's own plumbing.
+      if (property.name.startsWith('__@')) continue;
       const declaration = property.valueDeclaration ?? property.declarations?.[0] ?? ctx.location;
       const propertyType = checker.getTypeOfSymbolAtLocation(property, declaration);
       const propertyOptional = (property.flags & ts.SymbolFlags.Optional) !== 0;
@@ -490,10 +508,22 @@ export function checkoutPackageAtRef(repoRoot: string, relativeDir: string, ref:
   // tree's node_modules is the closest available approximation: a sibling contract package
   // resolves to its current version on both sides, which is correct, because a change to that
   // sibling is caught when the checker runs on the sibling.
-  const modules = path.join(repoRoot, 'node_modules');
-  if (existsSync(modules)) {
+  // BOTH the workspace root's node_modules and the PACKAGE'S OWN. In a pnpm workspace the root
+  // holds only hoisted tooling; a package's dependencies — including the sibling contract packages
+  // it imports, which are exactly the types that matter here — live in
+  // `packages/<name>/node_modules`. Linking only the root left the base side unable to resolve
+  // `@cloudsforge/contracts-chain`, so every type that flowed through it degraded to `any` and the
+  // head side's real types all read as `type-changed`: AssetCode "was scalar (any), is now union",
+  // and so on for the whole package. That is a breaking finding on code nobody touched, which is
+  // the failure mode this checker can least afford — it is the thing standing between a removed
+  // contract field and a runtime break in a consumer whose CI never sees the change, and a checker
+  // that cries wolf on every push gets muted.
+  for (const modules of [path.join(repoRoot, 'node_modules'), path.join(repoRoot, relativeDir, 'node_modules')]) {
+    if (!existsSync(modules)) continue;
+    const link = path.join(scratch, path.relative(repoRoot, modules));
     try {
-      symlinkSync(modules, path.join(scratch, 'node_modules'), 'dir');
+      mkdirSync(path.dirname(link), { recursive: true });
+      symlinkSync(modules, link, 'dir');
     } catch {
       // A symlink we cannot make is a resolution difference, which the notes will show.
     }
