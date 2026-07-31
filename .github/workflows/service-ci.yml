@@ -67,6 +67,26 @@ on:
         required: false
         default: '16'
         type: string
+      migrate-command:
+        description: >-
+          How to run the one-shot migrator INSIDE the built image, for the startup smoke test. The
+          image ships no package manager, so this is a bare interpreter line, not a script name.
+          The estate convention is `node --import tsx src/migrator.ts`; a published service that
+          runs compiled output overrides it with `node dist/migrator.js`.
+        required: false
+        default: node --import tsx src/migrator.ts
+        type: string
+      smoke-env:
+        description: >-
+          Extra `KEY=VALUE` lines (one per line) the startup smoke test passes to both the migrator
+          and the service container. A service whose `env.ts` validates its configuration at import
+          — every service in this estate does — exits before it serves `/livez` unless the variables
+          it declares are present, so the smoke test could never boot it on the database alone. These
+          are CI-only non-secrets: a throwaway token that clears a length check, a JWKS URL that is
+          never dialled because `/livez` needs no identity. Never a real credential.
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build:
@@ -400,6 +420,36 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # ────────────────────────────────────────────────────────────────────────────────────────────
+    # THE NINTH DEFECT: this smoke test could not have passed for any service in the estate.
+    #
+    # It started the image with a DSN pointing at 127.0.0.1:5432 — where, under `docker run`'s
+    # default bridge network, NOTHING listens, because that address is the container itself and no
+    # Postgres was ever started for this job — and then waited thirty seconds for a `/livez` the
+    # container could never serve. Every service here asserts its schema at boot (`index.ts` calls
+    # `assertSchemaAtLeast` and exits otherwise, deliberately) and validates its environment at
+    # import (`env.ts` exits on a missing variable), so with no database and none of its declared
+    # env the process exits long before it binds a socket. Like the eight defects before it, this
+    # one survived only because no repository had pushed and run the job.
+    #
+    # The fix gives the smoke test what a real service is entitled to expect: the same Postgres the
+    # test job gets, reached over host networking, migrated with the image's own one-shot migrator,
+    # and the service's declared configuration via `smoke-env`. A service with no database
+    # (postgres:false) keeps the old bridge-network path and needs none of it.
+    # ────────────────────────────────────────────────────────────────────────────────────────────
+    services:
+      postgres:
+        image: ${{ inputs.postgres && format('postgres:{0}', inputs.postgres-version) || '' }}
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -413,27 +463,64 @@ jobs:
           tags: ${{ inputs.service }}:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      # A built image proves the Dockerfile parses. It does not prove the image can start, and
+      # A built image proves the Dockerfile parses. It does not prove the image can START, and
       # 'container is unhealthy' with no logs is the shape of silent failure this estate has been
-      # bitten by more than once. So: start it, and read the endpoint the load balancer reads.
-      - name: The image starts and answers /livez
+      # bitten by more than once. So: give it a database and its declared config, migrate, start it,
+      # and read the endpoint the load balancer reads.
+      - name: The image migrates, starts and answers /livez
+        env:
+          NEEDS_DB: ${{ inputs.postgres }}
+          DECLARED: ${{ inputs.database-env-var }}
+          SERVICE: ${{ inputs.service }}
+          PORT: ${{ inputs.port }}
+          MIGRATE: ${{ inputs.migrate-command }}
+          SMOKE_ENV: ${{ inputs.smoke-env }}
         run: |
-          set -euo pipefail
-          docker run -d --name ci-${{ inputs.service }} -p 127.0.0.1:${{ inputs.port }}:${{ inputs.port }} \
-            -e PORT=${{ inputs.port }} \
-            -e ${{ inputs.database-env-var || 'DATABASE_URL' }}=postgres://ci:ci@127.0.0.1:5432/ci \
-            ${{ inputs.service }}:ci
+          set -uo pipefail
+          image="${SERVICE}:ci"
+          name="ci-${SERVICE}"
+
+          # The declared database variable, defaulted the same way every other job defaults it.
+          dbvar="$DECLARED"
+          if [ -z "$dbvar" ]; then
+            dbvar="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+          fi
+
+          # The service's declared configuration, one `-e` per non-empty line.
+          env_args=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && env_args+=(-e "$line")
+          done <<< "$SMOKE_ENV"
+          env_args+=(-e "PORT=${PORT}")
+
+          net=(-p "127.0.0.1:${PORT}:${PORT}")
+          if [ "$NEEDS_DB" = "true" ]; then
+            dsn="postgres://ci:ci@127.0.0.1:5432/ci_test"
+            # HOST networking so the container reaches the Postgres SERVICE on the runner's
+            # 127.0.0.1:5432. Bridge networking is exactly what put 127.0.0.1 inside the container,
+            # where nothing listened — the heart of this defect. `-p` is meaningless under host mode,
+            # so it is dropped in favour of the port binding directly on the host.
+            net=(--network host)
+            env_args+=(-e "${dbvar}=${dsn}")
+            echo "migrating the schema the service will assert, using the image's own migrator"
+            docker run --rm --network host "${env_args[@]}" "$image" $MIGRATE
+          fi
+
+          docker run -d --name "$name" "${net[@]}" "${env_args[@]}" "$image"
+
           for attempt in $(seq 1 30); do
-            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${{ inputs.port }}/livez" || true)
+            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/livez" || true)
             [ "$code" = "200" ] && { echo "ok: /livez answered after ${attempt}s"; exit 0; }
+            # A container that has already exited will never answer; stop waiting and show why.
+            docker ps --format '{{.Names}}' | grep -qx "$name" || break
             sleep 1
           done
           echo "::error::the image never answered /livez"
-          docker logs --tail 60 ci-${{ inputs.service }}
+          docker logs --tail 80 "$name" || true
           exit 1
       - name: Logs on failure
         if: failure()
-        run: docker logs --tail 100 ci-${{ inputs.service }} || true
+        run: docker logs --tail 100 "ci-${{ inputs.service }}" || true
       - name: Down
         if: always()
-        run: docker rm -f ci-${{ inputs.service }} || true
+        run: docker rm -f "ci-${{ inputs.service }}" || true

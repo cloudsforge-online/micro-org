@@ -62,6 +62,50 @@ test('a skipped database suite fails the build rather than passing quietly', () 
   assert.match(WORKFLOW, /grep -qiE 'set \[A-Z_\]\*TEST_DATABASE_URL\|database tests are disabled'/)
 })
 
+/* ------------------------------ the image smoke test ------------------------------- */
+
+/** The image job, sliced out so its shell can be asserted the same way the test job's is. */
+const IMAGE_JOB = WORKFLOW.slice(WORKFLOW.indexOf('\n  image:'))
+
+test('the image smoke test gives a DB-backed service the database it refuses to start without', () => {
+  // The ninth defect, and the same cause as the eight before it: the job had never run. It started
+  // the image against a DSN pointing at 127.0.0.1:5432 under bridge networking — where nothing
+  // listens, because that address is the container itself and no Postgres was started for the job —
+  // and waited for a /livez that a service which asserts its schema at boot could never serve. The
+  // fix is the same Postgres the test job gets, reached over host networking.
+  assert.match(IMAGE_JOB, /services:\s*\n\s*postgres:/, 'the image job must run a Postgres container')
+  assert.match(IMAGE_JOB, /POSTGRES_DB: ci_test/, 'the database name must satisfy the /test/i guard')
+  assert.match(IMAGE_JOB, /--network host/, 'the container must reach the runner\'s Postgres service')
+})
+
+test('the image is migrated by its own one-shot migrator before /livez is polled', () => {
+  // A service asserts its schema and refuses to serve below it, so the smoke test must migrate first
+  // — and it does so IN the image, which ships no package manager, hence a bare interpreter line.
+  assert.match(IMAGE_JOB, /docker run --rm --network host[^\n]*\$MIGRATE/, 'the migrator must run in the image')
+  assert.match(WORKFLOW, /migrate-command:/)
+  assert.match(WORKFLOW, /default: node --import tsx src\/migrator\.ts/)
+})
+
+test('the service\'s declared configuration reaches the smoke container', () => {
+  // env.ts validates configuration at import and exits on a missing variable, so a database alone
+  // is not enough to boot; the caller passes the rest through smoke-env, one -e per line.
+  assert.match(WORKFLOW, /smoke-env:/)
+  assert.match(IMAGE_JOB, /while IFS= read -r line; do/)
+  assert.match(IMAGE_JOB, /env_args\+=\(-e "\$line"\)/)
+})
+
+test('the poll stops early once the container has exited rather than waiting the full window', () => {
+  // A container that crashed on its config will never answer; the old loop slept the whole thirty
+  // seconds regardless, turning a fast failure into a slow one with no extra signal.
+  assert.match(IMAGE_JOB, /docker ps --format '\{\{\.Names\}\}' \| grep -qx "\$name" \|\| break/)
+})
+
+test('a service with no database keeps the bridge-network path and needs no migrate', () => {
+  // postgres:false must not drag in host networking or a migrate step it has no use for.
+  assert.match(IMAGE_JOB, /if \[ "\$NEEDS_DB" = "true" \]; then/)
+  assert.match(IMAGE_JOB, /net=\(-p "127\.0\.0\.1:\$\{PORT\}:\$\{PORT\}"\)/)
+})
+
 /* ------------------------------ rule 1 ------------------------------- */
 
 /**
