@@ -162,6 +162,11 @@ jobs:
           token: ${{ secrets.estate_token || github.token }}
       - uses: pnpm/action-setup@v4
         if: inputs.package-manager == 'pnpm'
+        with:
+          # Pinned, because the service's package.json is in service/ now and pnpm/action-setup
+          # looks in the working directory for the packageManager field. Every service in the
+          # estate is on pnpm@11.9.0.
+          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
