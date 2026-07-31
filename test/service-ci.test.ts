@@ -129,3 +129,70 @@ test('rule 1 reads code, not prose', () => {
     'the unstripped source must not be scanned again',
   )
 })
+
+/* -------------------------- secret hygiene --------------------------- */
+
+const HYGIENE = readFileSync(
+  fileURLToPath(new URL('../.github/workflows/secret-hygiene.yml', import.meta.url)),
+  'utf8',
+)
+
+/**
+ * The .env.example check, lifted out so the shape can be exercised. Kept honest by the drift test
+ * below, which fails if the workflow's own patterns stop matching these.
+ */
+const BENIGN = /=(localhost|127\.0\.0\.1|http:\/\/|https:\/\/|\$\{)/i
+const PLACEHOLDER =
+  /=.*(change[ _-]?me|replace|to[ _-]?be[ _-]?set|placeholder|example|your[ _-]|<[a-z]|todo|xxx|\.\.\.)/i
+const LOCAL_ONLY = /^[^=]*=[^=]*(localhost|127\.0\.0\.1)/i
+const SENSITIVE = /^[A-Z_]*(SECRET|TOKEN|PASSWORD|KEY|DSN|URL)[A-Z_]*=.+/
+
+const flagged = (line: string) =>
+  SENSITIVE.test(line) && !BENIGN.test(line) && !PLACEHOLDER.test(line) && !LOCAL_ONLY.test(line)
+
+test('the placeholders five services actually use are recognised', () => {
+  // billing, ledger, notify, pricing and settlement each failed this check on a value that could
+  // not be mistaken for a credential. The allowlist knew `changeme` and not `CHANGE_ME`.
+  for (const line of [
+    'OUTBOX_SIGNING_SECRET=CHANGE_ME_TO_32_RANDOM_CHARACTERS',
+    'NOTIFY_INGEST_SIGNING_SECRET=CHANGE_ME_at_least_24_characters',
+    'OUTBOX_SIGNING_SECRET=REPLACE-with-openssl-rand-hex-24',
+    'SETTLEMENT_SERVICE_TOKEN=REPLACE-with-a-scoped-service-token',
+    'BILLING_LEDGER_TOKEN=CHANGE_ME_TO_A_SERVICE_TOKEN',
+  ]) {
+    assert.equal(flagged(line), false, `${line} is a placeholder and must pass`)
+  }
+})
+
+test('a local development DSN passes, including one embedded in JSON', () => {
+  assert.equal(flagged('NOTIFY_DATABASE_URL=postgres://cloudsforge:CHANGE_ME@127.0.0.1:5432/notify'), false)
+  assert.equal(flagged('SETTLEMENT_RPC_URLS={"ember":"http://127.0.0.1:8545"}'), false)
+})
+
+test('a real credential is still caught — including a remote DSN carrying its password', () => {
+  // The last of these passed before the scheme allowlist was tightened: `postgres://` was benign
+  // on its own, so a production DSN with its password waved straight through the check whose
+  // entire purpose is catching it.
+  for (const line of [
+    'OUTBOX_SIGNING_SECRET=8f3c2b91a7d54e60b12f9c3a7e8d1042',
+    'STRIPE_API_KEY=sk_live_51H8xQ2LkdIwHu7ix',
+    'ADMIN_PASSWORD=hunter2',
+    'DB_URL=postgres://real:Pa55w0rd@prod.internal:5432/ledger',
+  ]) {
+    assert.equal(flagged(line), true, `${line} is a credential and must fail the build`)
+  }
+})
+
+test('a bare postgres:// scheme is no longer treated as benign', () => {
+  assert.doesNotMatch(
+    HYGIENE,
+    /benign='=\([^']*postgres:\/\/[^']*\)'/,
+    'a scheme allowlist lets a remote DSN through with its password',
+  )
+})
+
+test('the hygiene workflow\'s patterns match the ones asserted here', () => {
+  assert.match(HYGIENE, /benign='=\(localhost\|127\\\.0\\\.0\\\.1\|http:\/\/\|https:\/\/\|\\\$\\\{\)'/)
+  assert.match(HYGIENE, /placeholder='=\.\*\(change\[ _-\]\?me\|replace\|/)
+  assert.match(HYGIENE, /local_only='\^\[\^=\]\*=\[\^=\]\*\(localhost\|127\\\.0\\\.0\\\.1\)'/)
+})
