@@ -38,6 +38,16 @@ on:
         required: false
         default: true
         type: boolean
+      deep-link-path:
+        description: >-
+          A route the app really has, checked to return 200 on a hard refresh — '/portfolio',
+          '/products/create'. Leave empty to skip that half; the unknown-path 404 check always runs.
+          It must be a REAL route: the check this replaced used an invented path and required 200,
+          which is the opposite of the estate's honest-404 rule and could not be satisfied together
+          with it.
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build:
@@ -79,7 +89,12 @@ jobs:
       - name: Nothing reads import.meta.env.VITE_*
         run: |
           set -uo pipefail
-          hits=$(git grep -nIE 'import\.meta\.env\.VITE_[A-Z0-9_]+' -- . ':!*.md' ':!.github/workflows/*')
+          # `|| true` is load-bearing: git grep exits 1 when it finds nothing, GitHub runs every
+          # run: block as `bash -e {0}`, and `set -uo pipefail` does not turn -e off. Without it the
+          # assignment aborts the step on exactly the repositories that deserve to pass — the check
+          # was red on every clean frontend and had never passed anywhere. Same defect as the three
+          # in secret-hygiene.yml.
+          hits=$(git grep -nIE 'import\.meta\.env\.VITE_[A-Z0-9_]+' -- . ':!*.md' ':!.github/workflows/*' || true)
           if [ -n "$hits" ]; then
             echo "::error::${{ inputs.app }} reads a build-time environment variable:"
             echo "$hits"
@@ -98,7 +113,7 @@ jobs:
         run: |
           set -uo pipefail
           [ -f "${{ inputs.dockerfile }}" ] || { echo "ok: no Dockerfile"; exit 0; }
-          args=$(grep -nE '^\s*ARG\s+(VITE_|API_|.*_URL)' "${{ inputs.dockerfile }}")
+          args=$(grep -nE '^\s*ARG\s+(VITE_|API_|.*_URL)' "${{ inputs.dockerfile }}" || true)
           if [ -n "$args" ]; then
             echo "::error::a build argument would bake an environment into the image:"
             echo "$args"
@@ -113,7 +128,7 @@ jobs:
         run: |
           set -uo pipefail
           hits=$(git grep -nIE 'googletagmanager|google-analytics\.com|gtag\(|segment\.(com|io)/analytics|hotjar|mixpanel' \
-                 -- . ':!*.md' ':!.github/workflows/*')
+                 -- . ':!*.md' ':!.github/workflows/*' || true)
           if [ -n "$hits" ]; then
             echo "::error::a third-party analytics tag:"
             echo "$hits"
@@ -149,10 +164,37 @@ jobs:
             sleep 1
           done
           [ "${code:-}" = "200" ] || { echo "::error::the image returned ${code:-no answer} for /"; docker logs --tail 60 ci-${{ inputs.app }}; exit 1; }
-          # A deep link must not 404 on a hard refresh; the SPA owns its own routes.
-          deep=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/some/deep/route || true)
-          [ "$deep" = "200" ] || { echo "::error::a deep link returned $deep — try_files is not falling back to index.html"; exit 1; }
-          echo "ok: the SPA is served and deep links resolve"
+          # THIS CHECK USED TO DEMAND THE OPPOSITE OF THE ESTATE'S RULE, and it named the banned
+          # directive in its own failure message. It requested the invented path
+          # `/some/deep/route`, required 200, and told you to add `try_files … /index.html` — which
+          # `web-template`'s nginx.conf forbids and its CI fails the build over, because answering
+          # 200 for every address that does not exist is how an app stops having a 404 at all. Two
+          # guards in this repository demanded opposite behaviour, so a frontend could satisfy one
+          # or the other and never both. micro-hub-web declined to call this workflow for exactly
+          # that reason rather than break its own 404, which was the right call.
+          #
+          # The property actually worth checking is BOTH halves, and they are different paths:
+          # a route the app really has serves the shell with 200, and a route nobody has 404s.
+          unknown=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nothing-is-here-$RANDOM || true)
+          [ "$unknown" = "404" ] || {
+            echo "::error::an unknown path returned $unknown, not 404"
+            echo "Serve the shell through 'error_page 404 /index.html' so the app renders its own"
+            echo "not-found page while the status code stays honest. Do NOT use try_files \$uri /index.html."
+            exit 1
+          }
+          echo "ok: an unknown path 404s"
+
+          if [ -n "${{ inputs.deep-link-path }}" ]; then
+            deep=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080${{ inputs.deep-link-path }}" || true)
+            [ "$deep" = "200" ] || {
+              echo "::error::the real route ${{ inputs.deep-link-path }} returned $deep, not 200"
+              echo "A route the app owns must survive a hard refresh. Add it to nginx.conf's location list."
+              exit 1
+            }
+            echo "ok: ${{ inputs.deep-link-path }} survives a hard refresh"
+          else
+            echo "note: no deep-link-path given, so no real route was checked on a hard refresh"
+          fi
       - name: Down
         if: always()
         run: docker rm -f ci-${{ inputs.app }} || true

@@ -240,7 +240,7 @@ jobs:
           done < <(find "$src" -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \) \
                      ! -name '*.test.*' ! -name '*.spec.*' -print)
 
-          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$stripped" 2>/dev/null | sort -u)
+          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$stripped" 2>/dev/null | sort -u || true)
           # A service's own TEST database is its own database. The check compared against `$want`
           # by exact string, so `LEDGER_TEST_DATABASE_URL` — which every testsupport.ts in the
           # estate reads, by construction — counted as "another service's database" and failed the
@@ -252,7 +252,7 @@ jobs:
           prefix="${want%_DATABASE_URL}"
           others=$(printf '%s\n' "$read_vars" \
                    | grep -vxE "${prefix}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)" \
-                   | grep -v '^$')
+                   | grep -v '^$' || true)
           if [ -n "$others" ]; then
             echo "::error::${SERVICE} reads a database that is not its own: $(echo "$others" | tr '\n' ' ')"
             echo "Rule 1: a service owns exactly one database and reads no other. The answer to needing"
@@ -263,7 +263,7 @@ jobs:
           # A hard-coded DSN bypasses the variable check entirely, and is also a credential in a
           # repository. Tests and examples are exempt; they point at throwaway databases.
           literals=$(grep -rnE '(postgres|postgresql|mysql)://[a-zA-Z0-9_]+:' "$src" 2>/dev/null \
-                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'example')
+                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'example' || true)
           if [ -n "$literals" ]; then
             echo "::error::a connection string is written into the source:"
             echo "$literals"
@@ -284,7 +284,7 @@ jobs:
           failed=0
 
           # A relative import climbing three or more levels has left this repository.
-          escapes=$(grep -rnE "from '(\.\./){3,}" "$src" 2>/dev/null)
+          escapes=$(grep -rnE "from '(\.\./){3,}" "$src" 2>/dev/null || true)
           if [ -n "$escapes" ]; then
             echo "::error::an import escapes this repository:"
             echo "$escapes"
@@ -292,7 +292,7 @@ jobs:
           fi
 
           # A path import naming another checkout by name.
-          siblings=$(grep -rnE "from '[^']*(repos|micro)/[a-z0-9-]+/(src|services|packages)" "$src" 2>/dev/null)
+          siblings=$(grep -rnE "from '[^']*(repos|micro)/[a-z0-9-]+/(src|services|packages)" "$src" 2>/dev/null || true)
           if [ -n "$siblings" ]; then
             echo "::error::an import reaches into another repository's checkout:"
             echo "$siblings"
@@ -306,8 +306,10 @@ jobs:
           # Quoted only. An unquoted @cloudsforge/x in prose is a comment naming a package, and a
           # check that cannot tell those apart is a check people learn to work around by
           # rewording comments.
-          scoped=$(grep -rhoE "['\"]@cloudsforge/[a-z0-9-]+['\"]" "$src" 2>/dev/null | tr -d "'\"" | sort -u)
-          bad=$(printf '%s\n' "$scoped" | grep -vE "^@cloudsforge/($allowed)$" | grep -v '^$')
+          scoped=$(grep -rhoE "['\"]@cloudsforge/[a-z0-9-]+['\"]" "$src" 2>/dev/null | tr -d "'\"" | sort -u || true)
+          # `|| true` for the reason given at rule 1: a filter that removes everything exits 1,
+          # and removing everything is what a compliant service looks like.
+          bad=$(printf '%s\n' "$scoped" | grep -vE "^@cloudsforge/($allowed)$" | grep -v '^$' || true)
           if [ -n "$bad" ]; then
             echo "::error::not a published contract or runtime package: $(echo "$bad" | tr '\n' ' ')"
             echo "A cross-service import wearing a package name is still a cross-service import."
@@ -348,11 +350,11 @@ jobs:
       - name: No env_file fan-out
         run: |
           set -uo pipefail
-          files=$(git ls-files | grep -E '(docker-)?compose.*\.ya?ml$')
+          files=$(git ls-files | grep -E '(docker-)?compose.*\.ya?ml$' || true)
           [ -n "$files" ] || { echo "ok: no compose files in this repository"; exit 0; }
           bad=''
           for file in $files; do
-            hits=$(grep -nE "env_file:\s*\.?/?\.env\s*$|^\s*-\s*\.?/?\.env\s*$" "$file")
+            hits=$(grep -nE "env_file:\s*\.?/?\.env\s*$|^\s*-\s*\.?/?\.env\s*$" "$file" || true)
             [ -n "$hits" ] && bad="$bad\n$file:\n$hits"
           done
           if [ -n "$bad" ]; then
@@ -379,7 +381,7 @@ jobs:
           hits=$(grep -rnE 'setInterval\s*\(' "$src" 2>/dev/null \
                  | grep -vE '\.(test|spec)\.[jt]s' \
                  | grep -vE ':[0-9]+:\s*(//|\*|/\*)' \
-                 | grep -v 'cfctl-allow setInterval')
+                 | grep -v 'cfctl-allow setInterval' || true)
           if [ -n "$hits" ]; then
             echo "::error::setInterval in ${{ inputs.service }}:"
             echo "$hits"
