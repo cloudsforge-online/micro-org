@@ -28,6 +28,17 @@ on:
         required: false
         default: '22'
         type: string
+    secrets:
+      estate_token:
+        description: >-
+          A token with `contents:read` on micro-org, so the "Fetch the checker" step below can
+          check this repository out. THE TENTH DEFECT, and the same shape as the nine before it:
+          the step read micro-org with the caller's job token, which is scoped to the CALLING
+          repository and cannot see a different private one — so every contract repository that
+          called this workflow failed at `Repository not found` before the checker was ever
+          fetched. Like the others it survived because no repository had run the workflow yet.
+          Falls back to the job token, which succeeds only while micro-org is public.
+        required: false
 
 jobs:
   compat:
@@ -57,6 +68,7 @@ jobs:
           repository: ${{ github.repository_owner }}/micro-org
           ref: main
           path: .cfctl
+          token: ${{ secrets.estate_token || github.token }}
           sparse-checkout: |
             tools
             package.json
