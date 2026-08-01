@@ -15,6 +15,7 @@ import {
   compareSurfaces,
   entryFileOf,
   surfaceOfEntry,
+  widensScalar,
   type Finding,
 } from '../tools/compat.ts';
 
@@ -70,6 +71,57 @@ test('a widened union passes', () => {
   assert.deepEqual(breaking('widened-union'), []);
 });
 
+test('a literal widened to its own primitive passes, and any other scalar change does not', () => {
+  // The rule `widened-union` above already applies, applied to scalars. It exists because `as
+  // const` sweeps provenance into the public TYPE: `micro-sdk`'s `ROUTES.*.verifiedAt` is a
+  // `<repo>/src/server.ts:<line>` citation whose whole value is being correct, and judging its
+  // correction as a breaking change to consumers made the rule "never correct a citation".
+  // The fixture also carries one deliberate non-widening, asserted in the next case, so the claim
+  // here is that the two widenings are NOT among the breaking findings.
+  assert.deepEqual(
+    breaking('widened-scalar').map((finding) => finding.path),
+    ['Spec.retries'],
+  );
+  const widened = judge('widened-scalar').filter((finding) => finding.kind === 'widened-scalar');
+  assert.deepEqual(
+    widened.map((finding) => finding.path).sort(),
+    ['ROUTE.verifiedAt', 'ROUTE.weight'],
+  );
+});
+
+test('a literal swapped for a DIFFERENT literal is still breaking', () => {
+  // The half that keeps the relaxation honest. Same fixture, so it cannot go stale separately:
+  // `Spec.retries` moves 2 → 5, which widens nothing.
+  const changed = judge('widened-scalar').filter((finding) => finding.kind === 'type-changed');
+  assert.deepEqual(changed.map((finding) => finding.path), ['Spec.retries']);
+  assert.ok(changed[0]?.breaking, 'a different literal is not a widening');
+});
+
+test('widensScalar accepts only a literal and its own base primitive', () => {
+  for (const [before, after] of [
+    ['"a"', 'string'],
+    ["'a'", 'string'],
+    ['42', 'number'],
+    ['-1.5e3', 'number'],
+    ['7n', 'bigint'],
+    ['true', 'boolean'],
+  ] as const) {
+    assert.equal(widensScalar(before, after), true, `${before} -> ${after}`);
+  }
+  for (const [before, after] of [
+    // The finding this must never swallow: a field whose type genuinely changed.
+    ['"a"', 'number'],
+    ['42', 'string'],
+    ['string', 'number'],
+    ['string', 'unknown'],
+    // A union is not the base primitive, and `any` is not a widening anybody asked for.
+    ['"a"', 'string | null'],
+    ['"a"', 'any'],
+  ] as const) {
+    assert.equal(widensScalar(before, after), false, `${before} -> ${after}`);
+  }
+});
+
 test('a narrowed union fails, naming the value that was withdrawn', () => {
   const findings = breaking('narrowed-union');
   const narrowed = findings.find((finding) => finding.kind === 'narrowed-union');
@@ -105,7 +157,7 @@ test('a required field on an input becoming optional passes', () => {
 test('comparing a surface with itself finds nothing', () => {
   // The check runs on every push. A false positive on an unchanged package would train everybody
   // to ignore it, which costs more than not having it.
-  for (const fixture of ['added-optional', 'narrowed-union', 'widened-union', 'removed-export']) {
+  for (const fixture of ['added-optional', 'narrowed-union', 'widened-union', 'widened-scalar', 'removed-export']) {
     const surface = surfaceOfEntry(path.join(FIXTURES, fixture, 'head.ts'));
     assert.deepEqual(compareSurfaces(surface, surface), [], `${fixture} is not stable against itself`);
   }

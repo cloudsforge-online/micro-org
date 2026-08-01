@@ -80,6 +80,7 @@ export type FindingKind =
   | 'weakened-guarantee'
   | 'narrowed-union'
   | 'changed-union'
+  | 'widened-scalar'
   | 'type-changed'
   | 'kind-changed'
   | 'added';
@@ -89,6 +90,27 @@ export interface Finding {
   readonly path: string;
   readonly detail: string;
   readonly breaking: boolean;
+}
+
+/**
+ * Each literal form, and the primitive it widens to. Nothing else counts as a widening.
+ *
+ * Written as an explicit table rather than "does the new text look like a primitive name", because
+ * `type-changed` is the finding that catches a field going from `string` to `number`, and a loose
+ * test here would let that through as a widening.
+ */
+const LITERAL_BASE: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^"(?:[^"\\]|\\.)*"$/, 'string'],
+  [/^'(?:[^'\\]|\\.)*'$/, 'string'],
+  [/^`(?:[^`\\]|\\.)*`$/, 'string'],
+  [/^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i, 'number'],
+  [/^-?\d+n$/, 'bigint'],
+  [/^(?:true|false)$/, 'boolean'],
+];
+
+/** True only when `before` is a literal and `after` is exactly the primitive it is a literal of. */
+export function widensScalar(before: string, after: string): boolean {
+  return LITERAL_BASE.some(([pattern, base]) => pattern.test(before) && after === base);
 }
 
 const MAX_DEPTH = 8;
@@ -402,11 +424,29 @@ export function compareSurfaces(base: Surface, head: Surface): Finding[] {
       }
     } else if (before.kind === 'scalar' || before.kind === 'function') {
       if (before.text !== after.text) {
+        // A LITERAL REPLACED BY THE PRIMITIVE IT IS A LITERAL OF IS A WIDENING, NOT A BREAK, and
+        // this is the same judgement `widened-union` above already makes: every value that
+        // satisfied the old type still satisfies the new one, so no consumer's call and no
+        // consumer's read stops compiling. (The one thing it does break — annotating a variable
+        // with the old narrow type — is broken identically by adding a member to a union, which
+        // this checker has always passed. The rule is consistent, not newly lenient.)
+        //
+        // It matters because of what a literal type is usually doing on a public surface. It is
+        // rarely a contract; it is provenance that `as const` swept into the type by accident.
+        // `micro-sdk`'s `ROUTES.*.verifiedAt` is `<repo>/src/server.ts:<line>` — a citation whose
+        // whole value is being CORRECT, which means being edited whenever the cited file moves.
+        // Judging that as eight breaking changes to consumers who cannot observe the field's type
+        // made the rule "never correct a citation", which is the opposite of what the citation is
+        // for. This is deliberately the ONLY relaxation: literal → its own base primitive. A
+        // scalar changing to any other type is still breaking.
+        const widened = before.kind === 'scalar' && widensScalar(before.text, after.text);
         findings.push({
-          kind: 'type-changed',
+          kind: widened ? 'widened-scalar' : 'type-changed',
           path: entryPath,
-          detail: `was '${before.text}', is now '${after.text}'`,
-          breaking: true,
+          detail: widened
+            ? `was the literal ${before.text}, is now '${after.text}' — every value that satisfied it still does`
+            : `was '${before.text}', is now '${after.text}'`,
+          breaking: !widened,
         });
       }
     }
@@ -598,7 +638,7 @@ function main(argv: readonly string[]): number {
       );
       return 1;
     }
-    process.stdout.write(`ok: ${additive.length} additive change(s), nothing removed or narrowed\n`);
+    process.stdout.write(`ok: ${additive.length} additive or widening change(s), nothing removed or narrowed\n`);
     return 0;
   } finally {
     base.cleanup();
