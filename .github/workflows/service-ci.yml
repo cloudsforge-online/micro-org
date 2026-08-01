@@ -434,6 +434,41 @@ jobs:
           fi
           echo "ok: no env_file fan-out"
 
+      # `.env.example` states the port the service actually defaults to.
+      #
+      # Not pedantry: `.env.example` is what a person copies to `.env` before running the thing.
+      # `micro-notify` shipped `PORT=4600` while `src/env.ts` defaulted to 4012, and
+      # `micro-settlement` shipped `PORT=4008` — the port `micro-custody` and `micro-indexer` both
+      # bind — while its own code defaulted to 4000. Copying that file verbatim put three services
+      # on one port, and the file and the code disagreed with no note saying which was right.
+      #
+      # This checks agreement, NOT any particular number. A service is free to choose any port; it
+      # is not free to document a different one than it uses. If the example deliberately differs,
+      # the right move is to say so in the file — and then this fails, which is the conversation.
+      - name: The example config states the port the code actually uses
+        run: |
+          set -uo pipefail
+          [ -f .env.example ] || { echo "ok: no .env.example"; exit 0; }
+          [ -f src/env.ts ] || { echo "ok: no src/env.ts"; exit 0; }
+
+          # The declared default, read out of the integer() call rather than from a comment.
+          coded=$(grep -oE "'PORT', *[0-9]+" src/env.ts | grep -oE '[0-9]+$' | head -1 || true)
+          # The example's value, ignoring commented-out lines and any *_PORT (SMTP_PORT et al).
+          example=$(grep -E '^PORT=[0-9]+' .env.example | head -1 | cut -d= -f2 || true)
+
+          if [ -z "$coded" ] || [ -z "$example" ]; then
+            echo "ok: nothing to compare (coded='${coded:-none}' example='${example:-none}')"
+            exit 0
+          fi
+          if [ "$coded" != "$example" ]; then
+            echo "::error::.env.example says PORT=${example}, but src/env.ts defaults to ${coded}"
+            echo "A person copies .env.example to .env and runs the service. Whichever is right,"
+            echo "they must agree — micro-notify said 4600 and meant 4012, and micro-settlement"
+            echo "said 4008, which is a port two other services bind."
+            exit 1
+          fi
+          echo "ok: .env.example and src/env.ts agree on PORT=${coded}"
+
       # Rule 8 — every background timer is a leased job.
       #
       # setInterval doing domain work is correct with exactly one replica and wrong with two:
