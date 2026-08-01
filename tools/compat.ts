@@ -81,6 +81,7 @@ export type FindingKind =
   | 'narrowed-union'
   | 'changed-union'
   | 'widened-scalar'
+  | 'widened-function'
   | 'type-changed'
   | 'kind-changed'
   | 'added';
@@ -111,6 +112,63 @@ const LITERAL_BASE: ReadonlyArray<readonly [RegExp, string]> = [
 /** True only when `before` is a literal and `after` is exactly the primitive it is a literal of. */
 export function widensScalar(before: string, after: string): boolean {
   return LITERAL_BASE.some(([pattern, base]) => pattern.test(before) && after === base);
+}
+
+/**
+ * True only when `after` is `before` with members ADDED to unions inside the signature.
+ *
+ * A function whose parameter or return embeds a named union — `topicSpec(topic: TopicName)`,
+ * `isRegisteredTopic(topic): topic is TopicName` — changes its signature text every time the
+ * union gains a member, which is precisely the additive change AD-02 exists to permit: every
+ * call that compiled still compiles, every read that compiled still compiles. Judging it as
+ * `type-changed` made "register a topic" a breaking change to the events contract, which would
+ * make the registry unmaintainable — the same trap §"never correct a citation" (widened-scalar
+ * above) closed for literals. This is deliberately the ONLY relaxation for functions, and it is
+ * conservative: the inserted run must be a bare literal or identifier joined by `|`; anything
+ * structurally richer, any removal, any reordering, any retyped parameter still reads as
+ * `type-changed` and breaks the build.
+ */
+export function widensFunctionSignature(before: string, after: string): boolean {
+  if (before === after) return false;
+  const base = tokenizeSignature(before);
+  const head = tokenizeSignature(after);
+  let i = 0;
+  let j = 0;
+  while (i < base.length || j < head.length) {
+    if (i < base.length && j < head.length && base[i] === head[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    // The only tolerated divergence: an insertion in `head` shaped `| <member>` or `<member> |`.
+    if (j + 1 < head.length && head[j] === '|' && isUnionMemberToken(head[j + 1]!)) {
+      j += 2;
+      continue;
+    }
+    if (j + 1 < head.length && isUnionMemberToken(head[j]!) && head[j + 1] === '|') {
+      j += 2;
+      continue;
+    }
+    return false;
+  }
+  return i === base.length && j === head.length;
+}
+
+/** String/number/bigint/boolean literals and bare type names. An object or generic inserted into
+ *  a union is NOT recognised — richer members fall through to `type-changed`, deliberately. */
+function isUnionMemberToken(token: string): boolean {
+  return (
+    LITERAL_BASE.some(([pattern]) => pattern.test(token)) || /^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(token)
+  );
+}
+
+/** Signature text as comparable tokens: string literals whole, names whole, punctuation single. */
+function tokenizeSignature(text: string): string[] {
+  return (
+    text.match(
+      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|-?\d[\w.]*|[A-Za-z_$][A-Za-z0-9_$.]*|\S/g,
+    ) ?? []
+  );
 }
 
 const MAX_DEPTH = 8;
@@ -192,9 +250,14 @@ function walk(
       root: ctx.root,
       kind: 'function',
       optional,
-      // The full signature text. A parameter added, removed or retyped, or a changed return
-      // type, all move this string, and all of them break at least one caller.
-      text: checker.typeToString(type),
+      // The full signature text — with NoTruncation, which matters twice. Truncated text elides
+      // union members behind '... 11 more ...', so (1) a member REMOVED from a large union could
+      // hide inside the ellipsis and pass as "unchanged", and (2) a member ADDED to one could
+      // never be recognised as the union widening it is (see widensFunctionSignature below):
+      // registering the estate's 18th topic read as three breaking changes because the compared
+      // strings were mostly ellipsis. A parameter added, removed or retyped, or a changed return
+      // type, all still move this string.
+      text: checker.typeToString(type, undefined, ts.TypeFormatFlags.NoTruncation),
       union: [],
     });
     return;
@@ -439,13 +502,21 @@ export function compareSurfaces(base: Surface, head: Surface): Finding[] {
         // made the rule "never correct a citation", which is the opposite of what the citation is
         // for. This is deliberately the ONLY relaxation: literal → its own base primitive. A
         // scalar changing to any other type is still breaking.
-        const widened = before.kind === 'scalar' && widensScalar(before.text, after.text);
+        const widenedScalar = before.kind === 'scalar' && widensScalar(before.text, after.text);
+        // The function counterpart of the same judgement: a signature whose only movement is
+        // union members ADDED (a topic registered, a capability declared) breaks no caller and
+        // no reader. See widensFunctionSignature for why this exists and how narrow it is.
+        const widenedFunction =
+          before.kind === 'function' && widensFunctionSignature(before.text, after.text);
+        const widened = widenedScalar || widenedFunction;
         findings.push({
-          kind: widened ? 'widened-scalar' : 'type-changed',
+          kind: widenedScalar ? 'widened-scalar' : widenedFunction ? 'widened-function' : 'type-changed',
           path: entryPath,
-          detail: widened
+          detail: widenedScalar
             ? `was the literal ${before.text}, is now '${after.text}' — every value that satisfied it still does`
-            : `was '${before.text}', is now '${after.text}'`,
+            : widenedFunction
+              ? 'the signature only gained union members — every call and every read still compiles'
+              : `was '${before.text}', is now '${after.text}'`,
           breaking: !widened,
         });
       }

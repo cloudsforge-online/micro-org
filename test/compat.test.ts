@@ -15,6 +15,7 @@ import {
   compareSurfaces,
   entryFileOf,
   surfaceOfEntry,
+  widensFunctionSignature,
   widensScalar,
   type Finding,
 } from '../tools/compat.ts';
@@ -119,6 +120,53 @@ test('widensScalar accepts only a literal and its own base primitive', () => {
     ['"a"', 'any'],
   ] as const) {
     assert.equal(widensScalar(before, after), false, `${before} -> ${after}`);
+  }
+});
+
+test('a function signature that only gained union members passes — registering a topic is additive', () => {
+  // The events registry's own shape: `topicSpec(topic: TopicName)` and the
+  // `topic is TopicName` predicate both re-print the whole union in their signature text, so
+  // every registered topic used to read as breaking — which would make the registry
+  // unmaintainable, the exact trap widened-scalar closed for citations.
+  assert.deepEqual(breaking('widened-function'), []);
+  const widened = judge('widened-function').filter((finding) => finding.kind === 'widened-function');
+  assert.deepEqual(
+    widened.map((finding) => finding.path).sort(),
+    ['describeTopic', 'isRegisteredTopic'],
+  );
+});
+
+test('a function signature that LOST a union member is still breaking', () => {
+  // The half that keeps the relaxation honest: a caller passing the removed member no longer
+  // compiles, and the checker must keep saying so.
+  const findings = breaking('narrowed-function');
+  assert.ok(findings.some((finding) => finding.path === 'describeTopic' && finding.kind === 'type-changed'));
+});
+
+test('widensFunctionSignature accepts only bare-member union insertions', () => {
+  for (const [before, after] of [
+    // Appended, string literal.
+    ['(t: "a" | "b") => void', '(t: "a" | "b" | "c") => void'],
+    // Prepended, and in a type predicate.
+    ['(t: string) => t is "a" | "b"', '(t: string) => t is "z" | "a" | "b"'],
+    // A named type joining a union.
+    ['(t: A) => R', '(t: A | B) => R'],
+  ] as const) {
+    assert.equal(widensFunctionSignature(before, after), true, `${before} -> ${after}`);
+  }
+  for (const [before, after] of [
+    // Unchanged is not a widening.
+    ['(t: "a") => void', '(t: "a") => void'],
+    // A removal, a swap, a retyped parameter, a new parameter, a changed return.
+    ['(t: "a" | "b") => void', '(t: "a") => void'],
+    ['(t: "a" | "b") => void', '(t: "a" | "c") => void'],
+    ['(t: string) => void', '(t: number) => void'],
+    ['(t: "a") => void', '(t: "a", u: string) => void'],
+    ['(t: "a") => string', '(t: "a") => number'],
+    // A structurally rich member is not recognised — deliberately conservative.
+    ['(t: "a") => void', '(t: "a" | { kind: string }) => void'],
+  ] as const) {
+    assert.equal(widensFunctionSignature(before, after), false, `${before} -> ${after}`);
   }
 });
 
