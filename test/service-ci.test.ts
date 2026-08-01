@@ -232,10 +232,15 @@ const BENIGN = /=(localhost|127\.0\.0\.1|http:\/\/|https:\/\/|\$\{)/i
 const PLACEHOLDER =
   /=.*(change[ _-]?me|replace|to[ _-]?be[ _-]?set|placeholder|example|your[ _-]|<[a-z]|todo|xxx|\.\.\.)/i
 const LOCAL_ONLY = /^[^=]*=[^=]*(localhost|127\.0\.0\.1)/i
+const EMPTY_JSON = /=(\{\}|\[\])$/
 const SENSITIVE = /^[A-Z_]*(SECRET|TOKEN|PASSWORD|KEY|DSN|URL)[A-Z_]*=.+/
 
 const flagged = (line: string) =>
-  SENSITIVE.test(line) && !BENIGN.test(line) && !PLACEHOLDER.test(line) && !LOCAL_ONLY.test(line)
+  SENSITIVE.test(line) &&
+  !BENIGN.test(line) &&
+  !PLACEHOLDER.test(line) &&
+  !LOCAL_ONLY.test(line) &&
+  !EMPTY_JSON.test(line)
 
 test('the placeholders five services actually use are recognised', () => {
   // billing, ledger, notify, pricing and settlement each failed this check on a value that could
@@ -282,4 +287,19 @@ test('the hygiene workflow\'s patterns match the ones asserted here', () => {
   assert.match(HYGIENE, /benign='=\(localhost\|127\\\.0\\\.0\\\.1\|http:\/\/\|https:\/\/\|\\\$\\\{\)'/)
   assert.match(HYGIENE, /placeholder='=\.\*\(change\[ _-\]\?me\|replace\|/)
   assert.match(HYGIENE, /local_only='\^\[\^=\]\*=\[\^=\]\*\(localhost\|127\\\.0\\\.0\\\.1\)'/)
+})
+
+test('an empty collection is not a credential, but a populated one still is', () => {
+  // `IDENTITY_SERVICE_TOKEN_GRANTS={}` is the safe default for "which service may hold which
+  // scope" — granting nothing — and its NAME matches *TOKEN*, so the guard flagged the one value
+  // that is definitionally empty. Identity had no .env.example at all until this was fixed, which
+  // is how a service every other service authenticates against came to be undeployable without
+  // reading its source.
+  assert.equal(flagged('IDENTITY_SERVICE_TOKEN_GRANTS={}'), false)
+  assert.equal(flagged('ALLOWED_KEYS=[]'), false)
+
+  // Narrow on purpose. The exemption is `{}` and `[]` and nothing else.
+  assert.equal(flagged('API_TOKENS={"admin":"sk_live_realvalue"}'), true)
+  assert.equal(flagged('SIGNING_KEYS=["8f3c2b91a7d54e60"]'), true)
+  assert.equal(flagged('API_TOKEN={} and-more'), true, 'the literal must be the whole value')
 })
