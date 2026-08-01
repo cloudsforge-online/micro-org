@@ -137,6 +137,47 @@ jobs:
           fi
           echo "ok: no third-party tags"
 
+      # ---------------------------------------------------------------- README --
+      - name: The repository documents itself
+        # TWELVE REPOSITORIES HAD NO README AT ALL — activity, billing, contracts, docs, identity,
+        # indexer, ledger, mint, notify, policy, pricing and worlds — and every one of them was
+        # green. Nothing anywhere asserted that a deployable explains itself, so the omission was
+        # invisible exactly the way four frontends shipping with no favicon was invisible until
+        # `brand-chrome.test.ts` existed.
+        #
+        # CALIBRATED AGAINST THE READMEs THAT ARE ALREADY GOOD, deliberately. Ten were measured
+        # first: route tables and configuration tables are NOT universal — micro-lantern and
+        # micro-emberkin document neither and are both strong — so requiring them would fail
+        # correct work, which is how six guards in this estate came to fire on their own prose.
+        # What every good one does have is substance and a way to run the thing. That is the bar.
+        #
+        # It is a floor, not a specification. A README that clears it can still be poor; one that
+        # does not clear it is certainly missing.
+        run: |
+          set -uo pipefail
+          if [ ! -f README.md ]; then
+            echo "::error::this repository has no README.md"
+            echo "A deployable that does not explain itself is one nobody can operate or extend."
+            echo "The shape and the reasoning are in micro-org: templates/README.template.md"
+            exit 1
+          fi
+
+          bytes=$(wc -c < README.md | tr -d ' ')
+          if [ "$bytes" -lt 4000 ]; then
+            echo "::error::README.md is ${bytes} bytes — a stub, not documentation"
+            echo "The smallest genuinely-documented service in this estate is about 6 kB."
+            exit 1
+          fi
+
+          # Every well-documented repository here says how to run and test it. It is the one
+          # section that is universal, and the first thing a new reader needs.
+          if ! grep -qiE 'pnpm (test|dev|install)|docker (run|compose)' README.md; then
+            echo "::error::README.md never says how to run or test this repository"
+            echo "Include the real commands, including the Postgres the suite needs."
+            exit 1
+          fi
+          echo "ok: README.md is ${bytes} bytes and says how to run the repository"
+
   image:
     name: Docker image
     if: inputs.build-image

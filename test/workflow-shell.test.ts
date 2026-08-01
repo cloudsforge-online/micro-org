@@ -30,7 +30,7 @@
  * Both classes share a cause: these checks read text and reason about meaning. That is fine, but it
  * has to be deliberate, and the two tests below make the deliberateness checkable.
  */
-import { test } from 'node:test'
+import { describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -146,4 +146,35 @@ test('the two workflows do not demand opposite things of the same nginx config',
   )
   assert.match(web, /"\$unknown" = "404"/, 'an unknown path must be required to 404')
   assert.match(web, /inputs\.deep-link-path/, 'the 200 check must use a route the app really has')
+})
+
+describe('a deployable documents itself', () => {
+  // Twelve repositories had no README at all and every one was green, because nothing anywhere
+  // asserted that a deployable explains itself — the same shape as four frontends shipping with no
+  // favicon. A brief telling an agent to write one is a thing agents forget; a gate is not.
+  const files = ['service-ci.yml', 'web-ci.yml'].map((f) => readFileSync(DIR + f, 'utf8'))
+
+  it('both reusable workflows check for a README', () => {
+    for (const yaml of files) {
+      assert.match(yaml, /The repository documents itself/)
+      assert.match(yaml, /this repository has no README\.md/)
+    }
+  })
+
+  it('the bar is substance and a way to run it, not a prescribed shape', () => {
+    // CALIBRATION IS THE POINT. Ten good READMEs were measured before this gate was written:
+    // route tables and configuration tables are NOT universal — lantern and emberkin document
+    // neither and are both strong — so requiring them would fail correct work, which is exactly
+    // how six guards in this estate came to fire on their own prose. The floor is 4 kB (the
+    // smallest genuinely-documented service is ~5.9 kB) and one run command.
+    for (const yaml of files) {
+      assert.match(yaml, /-lt 4000/, 'a size floor must exist')
+      assert.match(yaml, /pnpm \(test\|dev\|install\)\|docker \(run\|compose\)/)
+      assert.doesNotMatch(
+        yaml,
+        /README\.md never documents its routes|README must contain a route table/,
+        'requiring a route table would fail lantern and emberkin, which are good',
+      )
+    }
+  })
 })
