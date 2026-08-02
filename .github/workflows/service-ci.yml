@@ -193,6 +193,547 @@ jobs:
         working-directory: service
         run: ${{ inputs.package-manager }} run typecheck
 
+      # ─────────────────────────────────────────────────────────────────────────────────────────
+      # Every scope this service's gates demand exists in the contracts registry.
+      #
+      # The registry knew 14 scopes while the estate's services gated on ~30 more. identity
+      # fail-fasts on any grant naming an unknown scope (identity/src/env.ts:141), so a scope
+      # missing from the registry is a service-to-service surface no identity-issued token can
+      # ever reach — and every suite stays green regardless, because each mints its own fake
+      # principals. Three audit sweeps each missed a different shape — inline literals, sibling
+      # constants, wrapper third arguments, computed families — which is why this DERIVES the
+      # demands rather than sampling them with a grep. Anything it cannot resolve fails the
+      # build loudly. A repository may exempt a scope in scope-exemptions.json at its root,
+      # with a reason of at least forty characters: an exemption without a reason is a hole
+      # (the NON_NOTIFYING_TOPICS pattern). The checker is mutation-tested in micro-org's own
+      # CI (test/workflow-shell.test.ts): a gate demanding an unregistered scope is injected
+      # into a fixture, the run asserted red, and the fixture asserted to have actually changed
+      # before the grade counts — this estate has had a canary that graded an unchanged file.
+      - name: Every scope this service demands is registered
+        env:
+          SRC: ${{ inputs.source-dir }}
+        run: |
+          set -uo pipefail
+          cat > "$RUNNER_TEMP/scope-audit.mjs" <<'SCOPE_AUDIT_SCRIPT'
+          // scope-audit: every scope a service's gates demand must be in the contracts registry.
+          //
+          // Derivation, not grep. Three audit sweeps each had a different blind spot — inline literals,
+          // helper-resolved constants, wrapper third arguments, computed families — so this walks the
+          // demand graph: seed on the primitives a service token is actually matched against, propagate
+          // through named wrappers whose parameter flows into a seed, and refuse loudly on any shape it
+          // cannot close. An unresolvable demand FAILS the build; silence is how the registry got 30
+          // scopes behind.
+          //
+          // usage: node scope-audit.mjs <source-dir> <contracts-auth-index.ts> [exemptions.json]
+          import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+          import { join } from 'node:path'
+
+          const [, , srcDir, contractsIndex, exemptionsPath] = process.argv
+          if (!srcDir || !contractsIndex) {
+            console.error('usage: scope-audit.mjs <source-dir> <contracts-auth-index.ts> [exemptions.json]')
+            process.exit(2)
+          }
+
+          // ---------------------------------------------------------------- the registry
+          const registryText = readFileSync(contractsIndex, 'utf8')
+          const scopesBlockStart = registryText.indexOf('export const SCOPES')
+          const scopesBlockEnd = registryText.indexOf('as const', scopesBlockStart)
+          if (scopesBlockStart < 0 || scopesBlockEnd < 0) {
+            console.error(`scope-audit: cannot find the SCOPES registry in ${contractsIndex}`)
+            process.exit(2)
+          }
+          const REGISTRY = new Set(
+            [...registryText.slice(scopesBlockStart, scopesBlockEnd).matchAll(/'([a-z][a-z0-9:-]+)':\s*Object\.freeze\(/g)].map(
+              (m) => m[1],
+            ),
+          )
+          if (REGISTRY.size === 0) {
+            console.error(`scope-audit: parsed zero scopes out of ${contractsIndex} — the parser is broken, not the estate`)
+            process.exit(2)
+          }
+
+          // ---------------------------------------------------------------- source collection
+          function collect(dir, out = []) {
+            for (const name of readdirSync(dir)) {
+              const p = join(dir, name)
+              const st = statSync(p)
+              if (st.isDirectory()) {
+                if (/testsupport|node_modules|dist/.test(name)) continue
+                collect(p, out)
+              } else if (
+                /\.(ts|tsx|mts|js|mjs)$/.test(name) &&
+                !/\.(test|spec)\.(ts|tsx|mts|js|mjs)$/.test(name) &&
+                !/\.d\.ts$/.test(name) &&
+                !/testsupport/.test(name)
+              ) {
+                out.push(p)
+              }
+            }
+            return out
+          }
+
+          // Comments are stripped BEFORE matching — six guards in this estate have fired on their own
+          // prose. Strings and template literals (including nested ${}) are preserved: the literals are
+          // the data.
+          function stripComments(text) {
+            let out = ''
+            let i = 0
+            const n = text.length
+            const templateDepth = [] // ${} nesting inside template literals
+            while (i < n) {
+              const c = text[i]
+              const d = text[i + 1]
+              if (c === '/' && d === '/') {
+                while (i < n && text[i] !== '\n') i++
+                continue
+              }
+              if (c === '/' && d === '*') {
+                i += 2
+                while (i < n && !(text[i] === '*' && text[i + 1] === '/')) {
+                  if (text[i] === '\n') out += '\n' // keep line numbers stable
+                  i++
+                }
+                i += 2
+                continue
+              }
+              if (c === "'" || c === '"') {
+                out += c
+                i++
+                while (i < n && text[i] !== c) {
+                  if (text[i] === '\\') {
+                    out += text[i] + (text[i + 1] ?? '')
+                    i += 2
+                    continue
+                  }
+                  out += text[i]
+                  i++
+                }
+                out += text[i] ?? ''
+                i++
+                continue
+              }
+              if (c === '`') {
+                out += c
+                i++
+                while (i < n && text[i] !== '`') {
+                  if (text[i] === '\\') {
+                    out += text[i] + (text[i + 1] ?? '')
+                    i += 2
+                    continue
+                  }
+                  if (text[i] === '$' && text[i + 1] === '{') {
+                    // an interpolation may contain anything, including strings; balance braces
+                    out += '${'
+                    i += 2
+                    let depth = 1
+                    while (i < n && depth > 0) {
+                      if (text[i] === '{') depth++
+                      if (text[i] === '}') depth--
+                      if (depth > 0) out += text[i]
+                      i++
+                    }
+                    out += '}'
+                    continue
+                  }
+                  out += text[i]
+                  i++
+                }
+                out += text[i] ?? ''
+                i++
+                continue
+              }
+              out += c
+              i++
+            }
+            void templateDepth
+            return out
+          }
+
+          const files = collect(srcDir).map((path) => ({ path, text: stripComments(readFileSync(path, 'utf8')) }))
+
+          const lineOf = (text, offset) => text.slice(0, offset).split('\n').length
+
+          // ---------------------------------------------------------------- small parsers
+
+          /** Split the argument list starting just after an opening paren. Returns { args, end }. */
+          function parseArgs(text, openParen) {
+            const args = []
+            let depth = 1
+            let current = ''
+            let i = openParen + 1
+            while (i < text.length && depth > 0) {
+              const c = text[i]
+              if (c === "'" || c === '"' || c === '`') {
+                const quote = c
+                current += c
+                i++
+                while (i < text.length && text[i] !== quote) {
+                  if (text[i] === '\\') {
+                    current += text[i] + (text[i + 1] ?? '')
+                    i += 2
+                    continue
+                  }
+                  current += text[i]
+                  i++
+                }
+                current += text[i] ?? ''
+                i++
+                continue
+              }
+              if (c === '(' || c === '[' || c === '{') depth++
+              if (c === ')' || c === ']' || c === '}') {
+                depth--
+                if (depth === 0) break
+              }
+              if (c === ',' && depth === 1) {
+                args.push(current.trim())
+                current = ''
+                i++
+                continue
+              }
+              current += c
+              i++
+            }
+            args.push(current.trim())
+            return { args: args.filter((a) => a !== ''), end: i }
+          }
+
+          /** Parameter names of a declaration's parameter list (types/defaults stripped; destructuring skipped). */
+          function paramNames(paramsText) {
+            const { args } = parseArgs('(' + paramsText + ')', 0)
+            return args.map((a) => {
+              const name = a.replace(/^\.\.\./, '').match(/^([A-Za-z_$][\w$]*)/)
+              return name ? name[1] : null
+            })
+          }
+
+          /**
+           * Every NAMED function in a file, with its parameter names and body span. Handles
+           * `function name(...)`, `const name = (...) =>` and union return types whose members are object
+           * literals (the `{` that starts the body is the one not followed by `|` or `&`).
+           */
+          function functionsIn(text) {
+            const out = []
+            const decl = /(?:^|[^\w$.])(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:^|[^\w$.])(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g
+            let m
+            while ((m = decl.exec(text))) {
+              const name = m[1] ?? m[2]
+              const open = text.indexOf('(', m.index + m[0].length - 1)
+              if (open < 0) continue
+              const params = parseArgs(text, open)
+              let i = params.end + 1
+              // skip a return-type annotation (or the `=>` of an arrow) to the body's opening brace
+              let bodyStart = -1
+              let angle = 0
+              let paren = 0
+              while (i < text.length) {
+                const c = text[i]
+                if (c === '<') angle++
+                else if (c === '>' && text[i - 1] !== '=') angle = Math.max(0, angle - 1)
+                else if (c === '(') paren++
+                else if (c === ')') paren--
+                else if (c === '{' && angle === 0 && paren === 0) {
+                  // a `{` here is either the body or an object TYPE in a union return annotation; a type
+                  // member is followed by `|` or `&` after its closing brace
+                  let depth = 1
+                  let j = i + 1
+                  while (j < text.length && depth > 0) {
+                    if (text[j] === '{') depth++
+                    if (text[j] === '}') depth--
+                    j++
+                  }
+                  const after = text.slice(j).match(/^\s*([|&])/)
+                  if (after) {
+                    i = j
+                    continue
+                  }
+                  bodyStart = i
+                  break
+                } else if (
+                  (c === ';' && angle === 0 && paren === 0) ||
+                  (c === '=' && text[i + 1] === '>' && angle === 0 && paren === 0)
+                ) {
+                  if (c === ';') break
+                  // arrow: body is a block or an expression
+                  const arrowBody = text.indexOf('{', i)
+                  const nl = text.indexOf('\n', i)
+                  if (arrowBody >= 0 && (nl < 0 || arrowBody < nl)) {
+                    bodyStart = arrowBody
+                  }
+                  break
+                }
+                i++
+              }
+              if (bodyStart < 0) continue
+              let depth = 1
+              let j = bodyStart + 1
+              while (j < text.length && depth > 0) {
+                if (text[j] === "'" || text[j] === '"' || text[j] === '`') {
+                  const quote = text[j]
+                  j++
+                  while (j < text.length && text[j] !== quote) j += text[j] === '\\' ? 2 : 1
+                } else if (text[j] === '{') depth++
+                else if (text[j] === '}') depth--
+                j++
+              }
+              out.push({ name, params: paramNames(params.args.join(',')), bodyStart, bodyEnd: j, declStart: m.index })
+            }
+            return out
+          }
+
+          const fnIndex = new Map(files.map((f) => [f.path, functionsIn(f.text)]))
+
+          /** The innermost..outermost named functions containing an offset. */
+          function enclosing(file, offset) {
+            return (fnIndex.get(file.path) ?? [])
+              .filter((fn) => fn.bodyStart < offset && offset < fn.bodyEnd)
+              .sort((a, b) => b.bodyStart - a.bodyStart)
+          }
+
+          // ---------------------------------------------------------------- the demand graph
+          const errors = []
+          const demands = new Map() // scope -> [provenance]
+          const gates = [] // { fn, idx, array }
+          const seen = new Set()
+
+          function addGate(fn, idx, array = false) {
+            const key = `${fn}@${idx}${array ? ':array' : ''}`
+            if (seen.has(key)) return
+            seen.add(key)
+            gates.push({ fn, idx, array })
+          }
+
+          addGate('requireScope', 1)
+          addGate('requireAllScopes', 1, true)
+          addGate('hasScope', 1)
+
+          const SCOPE_SHAPE = /^[a-z][a-z0-9-]*(:[a-z0-9-]+){1,2}$/
+
+          function demand(scope, where) {
+            if (!SCOPE_SHAPE.test(scope)) {
+              errors.push(`${where}: '${scope}' does not look like a service scope — the derivation is wrong, fix the checker`)
+              return
+            }
+            if (!demands.has(scope)) demands.set(scope, [])
+            demands.get(scope).push(where)
+          }
+
+          /** The closed set of values a computed family's placeholder may take, or null. */
+          function closedSetFor(file, argIdent, callOffset) {
+            // the demand site's own file must validate the variable against an enumerated set:
+            //   SETNAME.has(argIdent ...)  or  SETNAME.includes(argIdent ...)
+            const guard = new RegExp(`([A-Za-z_$][\\w$]*)\\.(?:has|includes)\\(\\s*${argIdent}\\b`)
+            const m = guard.exec(file.text)
+            if (!m) return null
+            const setName = m[1]
+            for (const f of files) {
+              const decl = new RegExp(`\\b${setName}\\s*(?::[^=\\n]{0,80})?=\\s*(?:new\\s+Set(?:<[^>]{0,80}>)?\\()?\\s*\\[`).exec(f.text)
+              if (!decl) continue
+              const open = f.text.indexOf('[', decl.index)
+              const { args } = parseArgs(f.text, open) // parseArgs balances [ ] by depth, splitting at depth 1
+              const literals = []
+              for (const a of args) {
+                const lit = a.match(/^['"]([^'"]+)['"]$/)
+                if (!lit) return null // a member that is not a literal means the set is not closed
+                literals.push(lit[1])
+              }
+              if (literals.length > 0) return literals
+            }
+            void callOffset
+            return null
+          }
+
+          function resolveTemplate(file, template, argIdent, where) {
+            // `prefix${x}`-shaped only; anything richer is a shape the estate does not have yet
+            const m = template.match(/^`([^`$]*)\$\{\s*[A-Za-z_$][\w$.]*\s*\}([^`$]*)`$/)
+            if (!m) {
+              errors.push(`${where}: computed scope ${template} has a shape this checker cannot close — fail, do not guess`)
+              return
+            }
+            const values = argIdent ? closedSetFor(file, argIdent, 0) : null
+            if (!values) {
+              errors.push(
+                `${where}: computed scope family ${template} is not provably closed — no enumerated set constrains its input at the demand site`,
+              )
+              return
+            }
+            for (const v of values) demand(`${m[1]}${v}${m[2]}`, `${where} (closed over {${values.join(', ')}})`)
+          }
+
+          function resolveExpr(expr, file, offset, depth = 0) {
+            const where = `${file.path}:${lineOf(file.text, offset)}`
+            if (depth > 6) {
+              errors.push(`${where}: resolution recursed past any shape the estate has — refusing to guess`)
+              return
+            }
+            const trimmed = expr.trim()
+            const literal = trimmed.match(/^['"]([^'"]+)['"]$/)
+            if (literal) {
+              demand(literal[1], where)
+              return
+            }
+            if (trimmed.startsWith('[')) {
+              const { args } = parseArgs(trimmed, 0)
+              for (const a of args) resolveExpr(a, file, offset, depth + 1)
+              return
+            }
+            if (trimmed.startsWith('`')) {
+              resolveTemplate(file, trimmed, null, where)
+              return
+            }
+            const call = trimmed.match(/^([A-Za-z_$][\w$]*)\((.*)\)$/s)
+            if (call) {
+              const [, fnName, inner] = call
+              const innerIdent = inner.trim().match(/^([A-Za-z_$][\w$]*)$/)?.[1] ?? null
+              for (const f of files) {
+                const fn = (fnIndex.get(f.path) ?? []).find((d) => d.name === fnName)
+                if (!fn) continue
+                const body = f.text.slice(fn.bodyStart, fn.bodyEnd)
+                const ret = body.match(/return\s+(`[^`]*`)/)
+                if (!ret) break
+                resolveTemplate(file, ret[1], innerIdent, where)
+                return
+              }
+              errors.push(`${where}: cannot resolve the scope computed by ${fnName}(…) — fail, do not guess`)
+              return
+            }
+            const ident = trimmed.match(/^[A-Za-z_$][\w$]*$/)?.[0]
+            if (!ident) {
+              errors.push(`${where}: '${trimmed}' is a scope expression this checker cannot resolve — fail, do not guess`)
+              return
+            }
+            // a parameter of an enclosing function makes that function a gate at that position
+            for (const fn of enclosing(file, offset)) {
+              const idx = fn.params.indexOf(ident)
+              if (idx >= 0) {
+                addGate(fn.name, idx)
+                return
+              }
+            }
+            // otherwise a constant, declared anywhere in this repository
+            for (const f of files) {
+              const decl = new RegExp(`\\b${ident}\\s*(?::\\s*[A-Za-z_$][\\w$.<>\\[\\] |']*?)?=\\s*(['"\`][^\\n]*)`, 'g')
+              let m
+              while ((m = decl.exec(f.text))) {
+                const init = m[1].trim()
+                const lit = init.match(/^(['"])([^'"]+)\1/)
+                if (lit) {
+                  demand(lit[2], `${where} (= ${ident} at ${f.path}:${lineOf(f.text, m.index)})`)
+                  return
+                }
+                if (init.startsWith('`')) {
+                  resolveTemplate(f, init.match(/^`[^`]*`/)?.[0] ?? init, null, where)
+                  return
+                }
+              }
+            }
+            errors.push(`${where}: '${ident}' resolves to no string constant in this repository — fail, do not guess`)
+          }
+
+          // seed pattern: <ident>.scopes.includes(X) — a service principal's scopes, matched directly.
+          // `key.scopes` is excluded: devplatform's customer API keys carry their own vocabulary, minted
+          // by that service and deliberately not in the contracts registry.
+          for (const file of files) {
+            const member = /([A-Za-z_$][\w$]*)\.scopes\.includes\s*\(/g
+            let m
+            while ((m = member.exec(file.text))) {
+              if (m[1] === 'key') continue
+              const open = file.text.indexOf('(', m.index + m[0].length - 1)
+              const { args } = parseArgs(file.text, open)
+              if (args.length >= 1) resolveExpr(args[0], file, m.index)
+            }
+            // grantsScope/grantsAllScopes seed ONLY when the granted argument is `<ident>.scopes` — a bare
+            // array parameter is mint-time validation (identity), and `caller.key.scopes` is an API key.
+            const grants = /\b(grantsScope|grantsAllScopes)\s*\(/g
+            while ((m = grants.exec(file.text))) {
+              if (/function\s+$/.test(file.text.slice(Math.max(0, m.index - 20), m.index + 1))) continue
+              const open = file.text.indexOf('(', m.index + m[1].length)
+              const { args } = parseArgs(file.text, open)
+              if (args.length < 2) continue
+              if (!/^[A-Za-z_$][\w$]*\.scopes$/.test(args[0].trim())) continue
+              resolveExpr(args[1], file, m.index)
+            }
+          }
+
+          // worklist: named gates, including ones discovered by parameter flow
+          for (let g = 0; g < gates.length; g++) {
+            const { fn, idx, array } = gates[g]
+            for (const file of files) {
+              const call = new RegExp(`(^|[^\\w$.])${fn}\\s*\\(`, 'g')
+              let m
+              while ((m = call.exec(file.text))) {
+                const at = m.index + m[1].length
+                if (/function\s+$/.test(file.text.slice(Math.max(0, at - 20), at))) continue // the declaration
+                if (/const\s+$/.test(file.text.slice(Math.max(0, at - 20), at))) continue
+                const open = file.text.indexOf('(', at + fn.length - 1)
+                const { args } = parseArgs(file.text, open)
+                if (args.length <= idx) continue
+                const arg = args[idx]
+                if (array && arg.trim().startsWith('[')) {
+                  const { args: members } = parseArgs(arg.trim(), 0)
+                  for (const member of members) resolveExpr(member, file, at)
+                } else {
+                  resolveExpr(arg, file, at)
+                }
+              }
+            }
+          }
+
+          // ---------------------------------------------------------------- exemptions
+          // The NON_NOTIFYING_TOPICS pattern: an exemption is a decision with its reasoning written down.
+          // Under 40 characters is not reasoning. An exemption for a scope that is registered, or that no
+          // gate demands, is stale and fails.
+          const exemptions = new Map()
+          if (exemptionsPath && existsSync(exemptionsPath)) {
+            let parsed
+            try {
+              parsed = JSON.parse(readFileSync(exemptionsPath, 'utf8'))
+            } catch {
+              errors.push(`${exemptionsPath}: not valid JSON`)
+              parsed = {}
+            }
+            for (const [scope, reason] of Object.entries(parsed)) {
+              if (typeof reason !== 'string' || reason.trim().length < 40) {
+                errors.push(`${exemptionsPath}: the exemption for '${scope}' has no real reason — under 40 characters is a hole, not a decision`)
+                continue
+              }
+              if (REGISTRY.has(scope)) {
+                errors.push(`${exemptionsPath}: '${scope}' is exempted AND registered — the exemption is stale, delete it`)
+                continue
+              }
+              exemptions.set(scope, reason)
+            }
+            for (const scope of exemptions.keys()) {
+              if (!demands.has(scope)) {
+                errors.push(`${exemptionsPath}: '${scope}' is exempted but no gate demands it — the exemption is stale, delete it`)
+              }
+            }
+          }
+
+          // ---------------------------------------------------------------- the verdict
+          const derived = [...demands.keys()].sort()
+          for (const scope of derived) {
+            const status = REGISTRY.has(scope) ? 'registered' : exemptions.has(scope) ? 'exempted' : 'MISSING'
+            console.log(`${status.padEnd(10)} ${scope}`)
+            for (const where of demands.get(scope)) console.log(`             ${where}`)
+          }
+
+          const missing = derived.filter((s) => !REGISTRY.has(s) && !exemptions.has(s))
+          for (const scope of missing) {
+            errors.push(
+              `'${scope}' is demanded by a gate but absent from @cloudsforge/contracts-auth SCOPE_NAMES — identity can never mint it. Register it in contracts/packages/auth/src/index.ts, or exempt it here with a written reason.`,
+            )
+          }
+
+          if (errors.length > 0) {
+            console.error(`\nscope-audit: FAILED`)
+            for (const e of errors) console.error(`  ${e}`)
+            process.exit(1)
+          }
+          console.log(`\nscope-audit: ok — ${derived.length} demanded scope(s), all registered or exempted (registry has ${REGISTRY.size})`)
+          SCOPE_AUDIT_SCRIPT
+          node "$RUNNER_TEMP/scope-audit.mjs" "service/$SRC" contracts/packages/auth/src/index.ts service/scope-exemptions.json
+
       - name: Test
         working-directory: service
         # The DSN is exported under the service's OWN variables, resolved exactly as the `rules`
