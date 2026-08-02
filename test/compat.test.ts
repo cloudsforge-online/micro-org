@@ -151,6 +151,13 @@ test('widensFunctionSignature accepts only bare-member union insertions', () => 
     ['(t: string) => t is "a" | "b"', '(t: string) => t is "z" | "a" | "b"'],
     // A named type joining a union.
     ['(t: A) => R', '(t: A | B) => R'],
+    // REORDERED members, with and without an addition. A union is a set — the printed order is
+    // an accident of declaration order, and regrouping the scope registry's keys by service
+    // reordered every union derived from `keyof typeof` without changing any type a consumer
+    // can observe. Six such signatures read as breaking before this case existed.
+    ['(t: "b" | "a") => void', '(t: "a" | "b") => void'],
+    ['(t: "c" | "a") => void', '(t: "a" | "b" | "c") => void'],
+    ['(t: string) => t is "c" | "a"', '(t: string) => t is "a" | "b" | "c" | "d"'],
   ] as const) {
     assert.equal(widensFunctionSignature(before, after), true, `${before} -> ${after}`);
   }
@@ -160,6 +167,9 @@ test('widensFunctionSignature accepts only bare-member union insertions', () => 
     // A removal, a swap, a retyped parameter, a new parameter, a changed return.
     ['(t: "a" | "b") => void', '(t: "a") => void'],
     ['(t: "a" | "b") => void', '(t: "a" | "c") => void'],
+    // Reordering does not launder a removal or a swap: the sorted sets still differ.
+    ['(t: "c" | "a" | "b") => void', '(t: "b" | "c") => void'],
+    ['(t: "b" | "a") => void', '(t: "c" | "b") => void'],
     ['(t: string) => void', '(t: number) => void'],
     ['(t: "a") => void', '(t: "a", u: string) => void'],
     ['(t: "a") => string', '(t: "a") => number'],

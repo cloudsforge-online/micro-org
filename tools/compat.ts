@@ -125,13 +125,21 @@ export function widensScalar(before: string, after: string): boolean {
  * make the registry unmaintainable — the same trap §"never correct a citation" (widened-scalar
  * above) closed for literals. This is deliberately the ONLY relaxation for functions, and it is
  * conservative: the inserted run must be a bare literal or identifier joined by `|`; anything
- * structurally richer, any removal, any reordering, any retyped parameter still reads as
- * `type-changed` and breaks the build.
+ * structurally richer, any removal, any retyped parameter still reads as `type-changed` and
+ * breaks the build.
+ *
+ * Union member ORDER is canonicalised away first. A TypeScript union is a set — `"a" | "b"` and
+ * `"b" | "a"` are the same type — and the printed order is an accident of declaration order, so
+ * reorganising an object literal's keys (the scope registry was regrouped by service when it
+ * became total, 2026-08-02) reordered every union derived from `keyof typeof` and read as six
+ * breaking changes to types no consumer can distinguish. Both directions stay verified after the
+ * sort: a member REMOVED is still missing from the sorted head and still breaks; a member
+ * swapped is a removal plus an insertion and still breaks.
  */
 export function widensFunctionSignature(before: string, after: string): boolean {
   if (before === after) return false;
-  const base = tokenizeSignature(before);
-  const head = tokenizeSignature(after);
+  const base = sortUnionRuns(tokenizeSignature(before));
+  const head = sortUnionRuns(tokenizeSignature(after));
   let i = 0;
   let j = 0;
   while (i < base.length || j < head.length) {
@@ -152,6 +160,42 @@ export function widensFunctionSignature(before: string, after: string): boolean 
     return false;
   }
   return i === base.length && j === head.length;
+}
+
+/**
+ * Sort every maximal `member | member | …` run of bare members into a canonical order, so the
+ * insertion-tolerant walk above compares union SETS rather than declaration order. Runs whose
+ * members are structurally rich never form here — `isUnionMemberToken` refuses them — so those
+ * signatures keep falling through to `type-changed` exactly as before.
+ */
+function sortUnionRuns(tokens: readonly string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    if (
+      isUnionMemberToken(tokens[i]!) &&
+      tokens[i + 1] === '|' &&
+      i + 2 < tokens.length &&
+      isUnionMemberToken(tokens[i + 2]!)
+    ) {
+      const members = [tokens[i]!];
+      let j = i + 1;
+      while (j + 1 < tokens.length && tokens[j] === '|' && isUnionMemberToken(tokens[j + 1]!)) {
+        members.push(tokens[j + 1]!);
+        j += 2;
+      }
+      members.sort();
+      for (let k = 0; k < members.length; k += 1) {
+        if (k > 0) out.push('|');
+        out.push(members[k]!);
+      }
+      i = j;
+      continue;
+    }
+    out.push(tokens[i]!);
+    i += 1;
+  }
+  return out;
 }
 
 /** String/number/bigint/boolean literals and bare type names. An object or generic inserted into
