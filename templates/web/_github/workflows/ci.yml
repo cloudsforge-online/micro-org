@@ -11,6 +11,16 @@ jobs:
     uses: __ORG__/micro-org/.github/workflows/web-ci.yml@main
     with:
       app: __NAME__
+      # A route this app really has, checked to survive a hard refresh. Leave it empty rather than
+      # inventing one: the unknown-path 404 check always runs, and requiring 200 from a path the app
+      # does not own is the opposite of the estate's honest-404 rule.
+      deep-link-path: ''
+    secrets:
+      # @cloudsforge/ui is unpublished and resolves through link:../ui/packages/ui, so the workflow
+      # checks micro-ui out as a sibling. It is private, so it needs a contents:read token — without
+      # one the checkout 404s, the `link:` specifier installs as a dangling symlink, and Typecheck
+      # cannot find a single @cloudsforge/ui export.
+      estate_token: ${{ secrets.ESTATE_READ_TOKEN }}
     permissions:
       contents: read
       packages: read
