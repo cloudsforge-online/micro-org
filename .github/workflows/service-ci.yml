@@ -872,8 +872,25 @@ jobs:
 
           # A hard-coded DSN bypasses the variable check entirely, and is also a credential in a
           # repository. Tests and examples are exempt; they point at throwaway databases.
+          #
+          # `testsupport.ts` IS a test file, and the exemption above already describes it exactly —
+          # it is the estate's convention name for the fixtures a suite shares, it is imported by
+          # nothing but `*.test.ts`, and the DSN in it is a loopback address for a database that
+          # lives for the length of one run. It was excluded from the READ-VARS half of this rule
+          # by the prefix comparison and from the SCOPE AUDIT in this same file (which skips
+          # /testsupport|node_modules|dist/), and only this one grep still counted it as source. So
+          # two checks in one file disagreed about whether it is test code, and the third read it
+          # the way that fails correct work: micro-studio's `BASE_ENV` fixture — four values a
+          # `loadEnv` test needs to be otherwise valid — would have failed the build.
+          #
+          # THAT FAILURE MODE IS THE ONE THIS FILE HAS ALREADY BEEN BITTEN BY TWICE. The rule
+          # against reading another service's database once forced micro-market to spell a variable
+          # as `['LEDGER','DATABASE','URL'].join('_')` to get a test that AGREES with the rule past
+          # the rule. A guard that makes correct code contort is a guard people learn to route
+          # around, and the route around this one would be to obscure the fixture — which loses the
+          # only thing that made it readable.
           literals=$(grep -rnE '(postgres|postgresql|mysql)://[a-zA-Z0-9_]+:' "$src" 2>/dev/null \
-                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'example' || true)
+                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'testsupport' | grep -v 'example' || true)
           if [ -n "$literals" ]; then
             echo "::error::a connection string is written into the source:"
             echo "$literals"
