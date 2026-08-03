@@ -63,20 +63,6 @@
       "status": "unfixed",
       "evidence": "Registered with producer 'mint' and consumed by notify/src/catalogue.ts:490, activity/src/classify.ts:648 and analytics/src/catalogue.ts:321. mint emits five topics, all of them unregistered — mint.token.created/paid/broadcast/deployed/failed, mint/src/tokens.ts:283 onward — and 'mint.deploy.confirmed' is not among them. This is the custody shape rather than the ledger one: mint.token.deployed is very probably this fact under a name nobody else knows, so the first move is to compare the two payloads, not to write a sixth emit.",
       "recordedAt": "2026-08-03"
-    },
-    "stale-record:settlement.outbound.failed": {
-      "owner": "micro-settlement",
-      "status": "deferred",
-      "until": "settlement emits a user-facing withdrawal-failure topic carrying userId, as it already did for the stuck twin (settlement/src/withdrawals.ts:532). Then notify writes the rule and this record and notify's own both go.",
-      "evidence": "notify records at notify/src/topics.ts that 'withdrawal transaction failed outright' has no rule, while settlement emits settlement.outbound.failed at settlement/src/withdrawals.ts:482 — so from here the record looks stale. It is not, and micro-notify has since said why: that topic is WALLET's narrow handover (settlement/src/outbox.ts:49-55), keyed by the withdrawal id, with no userId in the payload and no actor set, so a rule on it answers no_recipient for ever. notify's record now carries blockedBy 'no-subject' and names micro-settlement as the owner. Deferred rather than unfixed because the decision not to write the rule is correct today and stops being correct the moment the condition above is met.",
-      "recordedAt": "2026-08-03"
-    },
-    "stale-record:market.offer.made": {
-      "owner": "micro-market",
-      "status": "deferred",
-      "until": "market's OFFER_MADE payload carries the seller subject. `listing.sellerSubject` is already read three lines above the emit (market/src/bids.ts:399, to refuse shill bidding) and simply is not put on the event.",
-      "evidence": "notify records at notify/src/topics.ts that 'marketplace offer received' has no rule, while market emits market.offer.made at market/src/bids.ts:432 — so from here the record looks stale. micro-notify has since said why it is not: the payload is { listingId, offerId, offererSubject, amount, assetCode } with the OFFERER as actor, and the notification this requirement asks for goes to the SELLER, who is not on the envelope. Notifying the offerer that they made an offer is noise plus a false claim of coverage. notify's record carries blockedBy 'no-subject' and names micro-market. One field on market's payload closes it.",
-      "recordedAt": "2026-08-03"
     }
   }
 }
