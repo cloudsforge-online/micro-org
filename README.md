@@ -4,7 +4,8 @@ The organisation machinery for the CloudsForge polyrepo: reusable workflows, the
 compatibility checker, `cfctl`, the release manifests and the Renovate preset.
 
 **This repository is the Phase 2 gate.** AD-01 chose one repository per deployable — forty-six
-repositories — and stated the cost of that choice plainly: a `@cloudsforge/contracts-*` minor bump
+repositories in 03 §1, seventy in the organisation today — and stated the cost of that choice
+plainly: a `@cloudsforge/contracts-*` minor bump
 would otherwise be ~48 file edits, 24 manual publishes, and no CI anywhere able to test the
 composed system. AD-02 and AD-03 are the machinery that pays that cost, and
 [`docs/ecosystem/03-repository-responsibilities.md`](../../docs/ecosystem/03-repository-responsibilities.md)

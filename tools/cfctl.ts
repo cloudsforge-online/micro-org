@@ -13,9 +13,21 @@
 // a checkout with local changes is reported and left alone rather than clobbered, and a branch
 // that has diverged is a decision this tool will not make for you.
 //
-// One property is new: nothing under repos/ is ever touched. The existing estate is read-only
-// for this programme (see docs/ecosystem/README.md), and the registry marks those three
-// repositories unmanaged rather than omitting them, so the exclusion is visible in `cfctl list`.
+// One property is new, and it has been strengthened from a flag into a structure: cfctl cannot
+// write to a repository this programme does not own. The existing estate is read-only for this
+// programme (docs/ecosystem/README.md), the repositories in 03 §1.7 are leaving and stay
+// deployable as the rollback target, and one directory in the tree — `kindred-upstream` — is a
+// mirror of `savvaniss/kindred-resonance` and is not a CloudsForge repository at all. All eleven
+// are LISTED in the registry rather than omitted, so the exclusion is visible in `cfctl list`,
+// and three separate things now stop a write reaching one:
+//
+//   * `kind: 'kept'` implies `managed: false` in the type, so a managed kept row is a compile
+//     error rather than a typo. `registry.ts`'s header carries the argument.
+//   * `repoDir` and `inspect` take a `ManagedRepo`, so cfctl cannot compute a kept repository's
+//     directory at all. `stackRoot()` is gone; resolving a kept row was its only purpose.
+//   * every mutating git command goes through `gitWrite`, which refuses a checkout whose `origin`
+//     is not a repository of this organisation — the gate that survives a misclassification, which
+//     is the one failure the type cannot see.
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -36,6 +48,7 @@ import {
   deployableRepos,
   imageFor,
   managedRepos,
+  type ManagedRepo,
   type Repo,
 } from './registry.ts';
 
@@ -58,36 +71,23 @@ export function microRoot(): string {
   return override ? path.resolve(override) : path.resolve(ORG_ROOT, '..');
 }
 
-// The stack root holds repos/ and docs/. It is needed only to display the three unmanaged
-// repositories and to resolve their paths; nothing cfctl writes ever goes near it.
-export function stackRoot(): string {
-  const override = process.env['CLOUDSFORGE_STACK_ROOT'];
-  if (override) return path.resolve(override);
-  // PWD before cwd: the shell's logical path preserves the symlink that process.cwd() resolves
-  // away, which is the difference between finding the stack tree and walking past it.
-  const starts = [ORG_ROOT, process.env['PWD'] ?? process.cwd(), microRoot()];
-  for (const start of starts) {
-    let dir = path.resolve(start);
-    for (let i = 0; i < 8; i += 1) {
-      if (existsSync(path.join(dir, 'repos')) && existsSync(path.join(dir, 'docs'))) return dir;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  }
-  // A standalone checkout with no stack tree beside it. The kept repositories are not reachable,
-  // which is correct: there is nothing to reach.
-  return path.resolve(microRoot(), '..');
+// `ManagedRepo`, and there is deliberately no way to resolve a kept one.
+//
+// This used to take a `Repo` and branch: managed repositories were siblings, and the kept ones
+// were resolved under a `stackRoot()` that walked upward looking for a directory holding both
+// `repos/` and `docs/`. Both halves of that were wrong. The path it produced was stale — `hearth`
+// is a sibling now, not `repos/hearth` — and, much worse, it meant cfctl could compute an absolute
+// path for a repository this programme must never touch. `kindred-upstream` is a checkout of
+// `savvaniss/kindred-resonance` sitting among the estate's own, and the distance between "cfctl
+// knows where it is" and "cfctl runs git in it" is one careless filter.
+//
+// So the resolution is gone rather than guarded, and `stackRoot()` with it: its only caller was
+// the kept branch. A kept row keeps a `path` for a reader; nothing turns it into a directory.
+function repoDir(repo: ManagedRepo): string {
+  return path.join(microRoot(), repo.name);
 }
 
-function repoDir(repo: Repo): string {
-  // Managed repositories are siblings of this one. Only the three unmanaged entries live under
-  // the stack root, and cfctl never writes to those.
-  if (repo.managed) return path.join(microRoot(), repo.name);
-  return path.join(stackRoot(), repo.path);
-}
-
-function cloneUrl(repo: Repo): string {
+function cloneUrl(repo: ManagedRepo): string {
   const proto = process.env['CLOUDSFORGE_GIT_PROTO'] ?? 'https';
   return proto === 'ssh' ? `git@github.com:${ORG}/${repo.repo}.git` : `https://github.com/${ORG}/${repo.repo}.git`;
 }
@@ -107,7 +107,77 @@ function run(command: string, args: readonly string[], cwd?: string): Run {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// The two git surfaces, and why there are two
+// ---------------------------------------------------------------------------------------------
+//
+// The type system says a kept repository cannot reach a write path: `kind: 'kept'` implies
+// `managed: false` in `Repo`'s union, `managedRepos()` is the only source of a `ManagedRepo`, and
+// every write path takes one. That is a good guarantee and it has exactly one hole, which is the
+// hole every type-level guarantee has: **it only binds the rows that say `kept`.** Give
+// `kindred-upstream` `kind: 'service'` and it type-checks perfectly, and the next `cfctl pull`
+// runs git in a stranger's repository.
+//
+// A checkout knows something the registry cannot lie about: where it came from. So the runtime
+// half asks the checkout rather than the row, and it is a REFUSAL rather than a warning, because
+// the failure it prevents — this programme's tooling committing, resetting or force-pushing into
+// `savvaniss/kindred-resonance` — is not one an operator can undo by reading a log line.
+
+/** Read-only git. Refuses anything that could move a checkout, whosever it is. */
 function git(dir: string, args: readonly string[]): Run {
+  const verb = args[0] ?? '';
+  if (MUTATING_VERBS.has(verb)) {
+    throw new Error(
+      `cfctl: 'git ${verb}' can modify a checkout and was called on the read-only path. ` +
+        'Use gitWrite(repo, …), which is the one function that may, and which refuses a ' +
+        'repository outside this organisation.',
+    );
+  }
+  return run('git', args, dir);
+}
+
+// Everything porcelain that can change a working tree, an index, a ref or a remote. Deliberately
+// generous: a verb wrongly listed here costs a call site moving to `gitWrite`, and a verb wrongly
+// omitted costs a repository.
+const MUTATING_VERBS: ReadonlySet<string> = new Set([
+  'add', 'am', 'apply', 'branch', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'fetch',
+  'gc', 'init', 'merge', 'mv', 'pull', 'push', 'rebase', 'remote', 'reset', 'restore', 'revert',
+  'rm', 'stash', 'submodule', 'switch', 'tag', 'worktree',
+]);
+
+/** True for a remote that belongs to this organisation, in either protocol. */
+export function isOrgRemote(url: string): boolean {
+  const trimmed = url.trim().replace(/\.git$/, '');
+  return (
+    trimmed.startsWith(`https://github.com/${ORG}/`) ||
+    trimmed.startsWith(`git@github.com:${ORG}/`) ||
+    trimmed.startsWith(`ssh://git@github.com/${ORG}/`)
+  );
+}
+
+/**
+ * The ONE function in cfctl that may modify a checkout.
+ *
+ * Two gates, and the second is the one that matters:
+ *
+ *   1. `repo.managed` is re-asserted at runtime. The type is erased when this runs, so a JavaScript
+ *      caller, an `as never`, or a `JSON.parse`d registry would all sail past the compiler.
+ *   2. The checkout's own `origin` must be a repository of this organisation. This is the gate that
+ *      survives a MISCLASSIFICATION — the failure the type cannot see — and it names what it found,
+ *      because "refused" without the remote sends the reader to the wrong file.
+ */
+function gitWrite(repo: ManagedRepo, dir: string, args: readonly string[]): Run {
+  if (!repo.managed) {
+    throw new Error(`cfctl: refusing to run 'git ${args[0]}' in ${repo.name}: it is not managed`);
+  }
+  const origin = run('git', ['remote', 'get-url', 'origin'], dir);
+  if (origin.ok && !isOrgRemote(origin.out)) {
+    throw new Error(
+      `cfctl: refusing to run 'git ${args[0]}' in ${dir} — its origin is ${origin.out}, which is ` +
+        `not a ${ORG} repository. The registry says ${repo.name} is managed; the checkout says it ` +
+        'belongs to somebody else, and the checkout is the one that cannot be edited by mistake.',
+    );
+  }
   return run('git', args, dir);
 }
 
@@ -124,14 +194,14 @@ function hasCommand(command: string): boolean {
 export type CheckoutState = 'absent' | 'clean' | 'dirty' | 'detached' | 'no-upstream' | 'not-a-repo';
 
 export interface Checkout {
-  readonly repo: Repo;
+  readonly repo: ManagedRepo;
   readonly dir: string;
   readonly state: CheckoutState;
   readonly branch: string;
   readonly head: string;
 }
 
-export function inspect(repo: Repo): Checkout {
+export function inspect(repo: ManagedRepo): Checkout {
   const dir = repoDir(repo);
   const base = { repo, dir, branch: '', head: '' };
   if (!existsSync(dir)) return { ...base, state: 'absent' };
@@ -189,7 +259,9 @@ function cmdList(args: Args): number {
 // clone / pull
 // ---------------------------------------------------------------------------------------------
 
-function selected(args: Args): readonly Repo[] {
+// `ManagedRepo[]`, sourced from `managedRepos()` and narrowed only by filtering. clone and pull
+// both iterate this, so the type they receive is the type that reaches `gitWrite`.
+function selected(args: Args): readonly ManagedRepo[] {
   const only = args.option('only');
   const kind = args.option('kind');
   let repos = managedRepos();
@@ -218,6 +290,9 @@ function cmdClone(args: Args): number {
         continue;
       }
       process.stdout.write(`==> cloning ${repo.repo}\n`);
+      // No checkout yet, so there is no origin to interrogate. The URL is built from ORG by
+      // `cloneUrl`, which takes a ManagedRepo, so the destination is an organisation repository
+      // by construction — and the directory is one `microRoot()` owns.
       const result = run('git', ['clone', '--quiet', cloneUrl(repo), checkout.dir]);
       if (!result.ok) {
         // A repository that does not exist yet is the normal state for a phase that has not
@@ -238,12 +313,12 @@ function cmdClone(args: Args): number {
       process.stdout.write(`would fast-forward ${repo.name}\n`);
       continue;
     }
-    if (!git(checkout.dir, ['fetch', '--quiet', 'origin']).ok) {
+    if (!gitWrite(repo, checkout.dir, ['fetch', '--quiet', 'origin']).ok) {
       failed.push(repo.name);
       continue;
     }
     const before = git(checkout.dir, ['rev-parse', 'HEAD']).out;
-    if (!git(checkout.dir, ['merge', '--ff-only', '--quiet', 'FETCH_HEAD']).ok) {
+    if (!gitWrite(repo, checkout.dir, ['merge', '--ff-only', '--quiet', 'FETCH_HEAD']).ok) {
       process.stdout.write(`==> ${repo.name} has diverged from origin — left as is\n`);
       skipped.push(repo.name);
       continue;
@@ -276,7 +351,7 @@ function cmdPull(args: Args): number {
     const before = git(checkout.dir, ['rev-parse', 'HEAD']).out;
     process.stdout.write(`==> pulling ${repo.name} (${checkout.branch})\n`);
     // --ff-only: a diverged branch stops here rather than gaining a merge commit nobody asked for.
-    if (!git(checkout.dir, ['pull', '--ff-only', '--quiet']).ok) {
+    if (!gitWrite(repo, checkout.dir, ['pull', '--ff-only', '--quiet']).ok) {
       process.stdout.write('    (diverged from upstream, or fetch failed — left as is)\n');
       failed.push(repo.name);
       continue;
@@ -432,6 +507,34 @@ function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' 
   return 'unknown';
 }
 
+/**
+ * Directories sitting beside this checkout that the registry does not name.
+ *
+ * THE CRUCIBLE BUG, made findable. `registry.ts`'s first paragraph is about `clone-all.sh` and
+ * `pull-all.sh` carrying two copies of the repository list: `crucible` was in one and not the
+ * other, so the documented update path fast-forwarded eight repositories and left the ninth
+ * silently pinned. One list fixed the drift BETWEEN the two scripts and did nothing about the
+ * failure they shared — that a repository can exist and be in no list at all. It happened again
+ * and larger: this registry held 46 rows against a tree of 61 directories, and the seventeen it
+ * could not see included `micro-emberkin`, one of the three repositories the ledger account-type
+ * defect was actually found in. `estate-ci.yml` derives its repository list from the GitHub API
+ * for exactly that reason, and says so.
+ *
+ * A pure function over a directory rather than a hard-coded read of `microRoot()`, so it can be
+ * tested against a fixture. A test that could only run where the whole estate is checked out
+ * would pass vacuously in this repository's own CI, where the only sibling is this one — and a
+ * check that passes vacuously in the place it runs is the thing this estate keeps rediscovering.
+ */
+export function unregisteredSiblings(root: string, known: Iterable<string>): string[] {
+  if (!existsSync(root)) return [];
+  const named = new Set(known);
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .filter((name) => !named.has(name))
+    .sort();
+}
+
 export function diagnose(options: { online: boolean }): Diagnosis[] {
   const findings: Diagnosis[] = [];
   const versions = localPackageVersions();
@@ -467,7 +570,7 @@ export function diagnose(options: { online: boolean }): Diagnosis[] {
           fix: `git -C ${repo.path} push -u origin ${checkout.branch}`,
         });
       }
-      if (!git(checkout.dir, ['remote', 'get-url', 'origin']).ok) {
+      if (!run('git', ['remote', 'get-url', 'origin'], checkout.dir).ok) {
         findings.push({
           severity: 'warn',
           repo: name,
@@ -605,6 +708,22 @@ export function diagnose(options: { online: boolean }): Diagnosis[] {
       repo: '—',
       message: `${absent} of ${managedRepos().length} managed repositories are not checked out`,
       fix: "expected while their phase has not started; 'cfctl list' shows which",
+    });
+  }
+
+  // 5. A repository on this disk that the registry does not name. `fail`, not `warn`, on doctor's
+  // own dividing line: a warning is a repository that has not caught up with the machinery, and
+  // this is a rule already broken — the registry is meant to BE the list, and a directory missing
+  // from it is skipped by list, clone, pull, doctor and release at once, silently and in that
+  // order. That is what happened to `crucible`, and then to seventeen repositories at once.
+  for (const name of unregisteredSiblings(microRoot(), REGISTRY.map((repo) => repo.name))) {
+    findings.push({
+      severity: 'fail',
+      repo: name,
+      message: `${name}/ is checked out beside the estate and is in no registry row`,
+      fix:
+        'add it to tools/registry.ts — as a managed kind if this programme owns it, or with ' +
+        'kept() if it must never be written to. An omission that is written down is a decision.',
     });
   }
   return findings;
@@ -865,7 +984,7 @@ function verifyRelease(file: string): number {
 // Ports are assigned from the registry position rather than chosen, because 'pick a free port'
 // is how the estate ended up with eighteen fixed host ports and a compose file where
 // deploy.replicas is illegal. Under the gateway these are container ports only.
-function portFor(name: string): number {
+export function portFor(name: string): number {
   const index = deployableRepos().findIndex((repo) => repo.name === name);
   return 4100 + (index === -1 ? deployableRepos().length : index);
 }

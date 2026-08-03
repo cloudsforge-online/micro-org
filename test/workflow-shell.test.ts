@@ -449,9 +449,11 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
   }
 
   it('derives the repository list instead of writing one down', () => {
-    // tools/registry.ts lists 46 repositories and does NOT contain micro-emberkin, which is one of
-    // the three repositories the account defect was actually found in. A hand-maintained list would
-    // have made this job blind to the defect it exists to catch, and green while doing it.
+    // tools/registry.ts used to list 46 repositories and NOT contain micro-emberkin, which is one
+    // of the three repositories the account defect was actually found in. It holds all 70 now — but
+    // it was wrong for weeks with every test over it green, because a hand-maintained list can only
+    // be checked against another hand-maintained list. What the API returns cannot go stale by
+    // omission, which is a different property from being correct today.
     assert.match(yaml, /gh api --paginate "orgs\/\$\{OWNER\}\/repos/, 'the list must come from the API')
     assert.doesNotMatch(
       yaml,

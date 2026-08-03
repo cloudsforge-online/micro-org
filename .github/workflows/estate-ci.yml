@@ -85,11 +85,21 @@ name: estate-ci
 # an empty parent directory would otherwise report "0 disagreements" and pass. This job is built so
 # that the refusal is never how we find out:
 #
-#   * The repository list is DERIVED from the GitHub API, never written down here. micro-org's own
-#     tools/registry.ts lists 46 repositories and does not contain micro-emberkin — one of the three
-#     repositories the account defect was actually found in. A hand-maintained list would have made
-#     this job blind to the very defect it exists to catch, and would have reported green while doing
-#     it. The count the API returns is asserted, and a clone that fails is fatal rather than skipped.
+#   * The repository list is DERIVED from the GitHub API, never written down here. The evidence
+#     this bullet used to give was that micro-org's own tools/registry.ts listed 46 repositories and
+#     did not contain micro-emberkin — one of the three repositories the account defect was actually
+#     found in. That has been repaired: the registry now holds all 70, and `cfctl doctor` FAILS on a
+#     directory beside the estate that no row names, so it cannot silently fall behind again.
+#
+#     The bullet stands anyway, and the repair is the argument for it rather than against it. The
+#     registry was wrong for weeks while every test over it passed, because a hand-maintained list
+#     can only be checked against another hand-maintained list — the seventeen missing rows were
+#     found by counting directories on a disk, which is not a thing this job has. What the API
+#     returns cannot go stale by omission, and that is a different property from being correct
+#     today. A list here would also have to be edited in THIS repository every time another one is
+#     created, which is the drift that produced the 46 in the first place.
+#
+#     The count the API returns is asserted, and a clone that fails is fatal rather than skipped.
 #   * A CANARY runs BEFORE the real sweep, on every run: a known-bad account type is injected into
 #     the checked-out estate, and the job fails unless the sweep goes red AND names the injected file.
 #     Exit-code-only grading is not enough — a broken checkout also exits non-zero, for the wrong

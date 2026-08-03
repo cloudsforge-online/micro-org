@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
   inspect,
+  isOrgRemote,
   microRoot,
   parseManifest,
+  portFor,
   renderManifest,
   satisfies,
+  unregisteredSiblings,
   type ReleaseManifest,
 } from '../tools/cfctl.ts';
 import {
@@ -20,17 +25,30 @@ import {
 
 // -- the registry ------------------------------------------------------------------------------
 
-test('the registry holds all 46 repositories from 03 §1', () => {
-  assert.equal(REGISTRY.length, 46);
+test('the registry holds every repository in the organisation, and every directory on this disk', () => {
+  // 70 rather than 46, and the gap is the whole point of this sweep. 03 §1 enumerates 46; the
+  // organisation holds 70 unarchived repositories and the working tree holds 61 directories. The
+  // seventeen this file could not see included micro-emberkin, one of the three repositories the
+  // ledger account-type defect was found in — which is why estate-ci.yml derives its repository
+  // list from the GitHub API and says, in its own header, that registry.ts "does not contain
+  // micro-emberkin".
+  //
+  // The 59 managed rows are exactly the 59 `micro-*` repositories the organisation lists. The 11
+  // kept rows are the other 11, less `.github`, whose omission is argued in registry.ts rather
+  // than merely true: it cannot carry the prefix and cannot be checked out at micro/.github.
+  assert.equal(REGISTRY.length, 70);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
-  assert.equal(counts.get('service'), 22, '22 domain services');
-  assert.equal(counts.get('web'), 11, '11 frontends');
+  assert.equal(counts.get('service'), 26, '22 from 03 §1.1, plus emberkin, foresight, aetherholm and tessera');
+  assert.equal(counts.get('web'), 16, '11 from 03 §1.2, plus the five 05-user-journeys §1 records');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 4, '4 library repositories');
+  assert.equal(counts.get('assets'), 4, 'brand and the three per-title asset repositories');
   assert.equal(counts.get('template'), 2, '2 templates');
-  assert.equal(counts.get('org'), 1, 'this repository');
-  assert.equal(counts.get('kept'), 3, '3 kept exactly as they are');
+  assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
+  assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
+  assert.equal(managedRepos().length, 59);
+  assert.equal(deployableRepos().length, 45, 'services, frontends and operations services');
 });
 
 test('names are unique — a duplicate would make one entry unreachable', () => {
@@ -38,28 +56,102 @@ test('names are unique — a duplicate would make one entry unreachable', () => 
   assert.equal(names.size, REGISTRY.length);
 });
 
-test('nothing managed lives under repos/, and everything kept does', () => {
-  // The repository policy is absolute: the existing estate is read only for this programme. A
-  // managed entry pointing into repos/ would let clone, pull and release write to it.
-  for (const repo of REGISTRY) {
-    if (repo.managed) {
-      assert.ok(repo.path.startsWith('micro/'), `${repo.name} is managed but lives at ${repo.path}`);
-      assert.ok(repo.repo.startsWith('micro-'), `${repo.name} is managed but is not a micro-* repository`);
-    } else {
-      assert.ok(!repo.path.startsWith('micro/'), `${repo.name} is unmanaged but lives at ${repo.path}`);
-    }
+test('every managed row is a micro-* repository of this organisation', () => {
+  // The repository policy, on the rows cfctl may write to. `hearth` is checked out as a SIBLING
+  // now rather than under repos/, so "everything kept lives under repos/" — which this test used
+  // to assert — stopped being true and would have kept passing only because nothing looked.
+  for (const repo of managedRepos()) {
+    assert.ok(repo.path.startsWith('micro/'), `${repo.name} is managed but lives at ${repo.path}`);
+    assert.ok(repo.repo.startsWith('micro-'), `${repo.name} is managed but is not a micro-* repository`);
+    assert.equal(repo.managed, true);
   }
 });
 
-test('the kept repositories are listed rather than omitted', () => {
+test('the kept repositories are listed rather than omitted, and none can be written to', () => {
   // pull-all.sh omitted crucible, so the documented update path silently skipped it. An
   // exclusion that is written down is a decision; one that is not is that bug.
-  for (const name of ['hearth', 'asset-forge', 'stack']) {
+  for (const name of [
+    'hearth', 'asset-forge', 'stack',
+    'platform', 'forge-pay', 'forge-keyvault', 'forge-mint', 'crucible', 'ninety-days-after', 'shared-libs',
+    'kindred-upstream',
+  ]) {
     const repo = repoByName(name);
     assert.ok(repo, `${name} is missing from the registry`);
-    assert.equal(repo.managed, false);
+    assert.equal(repo.managed, false, `${name} is kept and must never be managed`);
+    assert.equal(repo.deployable, false, `${name} is kept and must never reach a release manifest`);
+    assert.equal(repo.kind, 'kept');
   }
-  assert.equal(managedRepos().length, 43);
+});
+
+/**
+ * The one repository in this tree that belongs to somebody else.
+ *
+ * `micro-emberkin` and `micro-emberkin-web` were copied forward out of
+ * `savvaniss/kindred-resonance`, and 19-new-products.md §3 makes it a requirement that "the
+ * upstream repository is not modified". Its mirror is checked out as a sibling of fifty-nine
+ * repositories cfctl clones, pulls and releases, and it looks exactly like them.
+ *
+ * The type is the primary guarantee and it cannot be asserted here — `kept('kindred-upstream', …,
+ * managed: true)` is not a value that can be written, so there is no test that observes it, only a
+ * compiler that refuses the file. What CAN be asserted is the data the type is protecting: this
+ * row's remote is not derivable from the org and the name, which is precisely what makes a tool
+ * that assumes it dangerous.
+ */
+test('kindred-upstream is not a CloudsForge repository, and the registry says which one it is', () => {
+  const repo = repoByName('kindred-upstream');
+  assert.ok(repo);
+  assert.equal(repo.managed, false);
+  assert.equal(repo.kind, 'kept');
+  assert.equal(repo.repo, 'kindred-resonance', 'the repository is not named after the directory');
+  assert.equal(repo.deployable, false);
+  const remote = repo.kind === 'kept' ? repo.remote : '';
+  assert.equal(remote, 'https://github.com/savvaniss/kindred-resonance.git');
+  assert.equal(isOrgRemote(remote), false, 'the guard in gitWrite must refuse this remote');
+});
+
+test('a foreign remote is recognised as foreign in every protocol git writes', () => {
+  // The runtime half of the guarantee, and the half that survives a MISCLASSIFICATION — giving
+  // kindred-upstream `kind: 'service'` type-checks perfectly and the type can say nothing.
+  assert.equal(isOrgRemote('https://github.com/cloudsforge-online/micro-ledger.git'), true);
+  assert.equal(isOrgRemote('git@github.com:cloudsforge-online/micro-ledger.git'), true);
+  assert.equal(isOrgRemote('ssh://git@github.com/cloudsforge-online/micro-ledger'), true);
+  assert.equal(isOrgRemote('https://github.com/savvaniss/kindred-resonance.git'), false);
+  assert.equal(isOrgRemote('git@github.com:savvaniss/kindred-resonance.git'), false);
+  // The near miss: an organisation whose name STARTS with ours. Without the trailing slash in the
+  // prefix this would read as ours and the refusal would never fire.
+  assert.equal(isOrgRemote('https://github.com/cloudsforge-online-evil/micro-ledger.git'), false);
+});
+
+/**
+ * Ports are derived from registry POSITION, and this sweep moved every position after `analytics`.
+ *
+ * `portFor`'s comment says ports are assigned rather than chosen "because 'pick a free port' is how
+ * the estate ended up with eighteen fixed host ports". Position gives uniqueness only while the
+ * order is stable, and inserting nine deployables into the middle is exactly what breaks that — so
+ * the property the comment is claiming is asserted here rather than assumed, and any future
+ * insertion that collides two repositories on one port is a red instead of a duplicate `EXPOSE`.
+ */
+test('every deployable gets a distinct container port, and an unregistered name gets its own', () => {
+  const ports = deployableRepos().map((repo) => portFor(repo.name));
+  assert.equal(new Set(ports).size, ports.length, 'two repositories were assigned the same port');
+  assert.equal(Math.min(...ports), 4100);
+  // The one case position cannot cover: `cfctl new` runs BEFORE the registry row exists, so the
+  // name is unknown and the port is one past the end. It must not be one already handed out.
+  assert.ok(!new Set(ports).has(portFor('a-repository-that-does-not-exist-yet')));
+});
+
+test('a directory beside the estate that no row names is reported, not skipped', () => {
+  // The crucible bug. Given a fixture rather than the real tree, because in this repository's own
+  // CI the only sibling is this repository — and a check that passes vacuously where it runs is
+  // the failure mode this estate keeps rediscovering.
+  const root = mkdtempSync(path.join(tmpdir(), 'cfctl-siblings-'));
+  for (const name of ['ledger', 'identity', 'somebody-elses-repo', '.hidden']) {
+    mkdirSync(path.join(root, name));
+  }
+  writeFileSync(path.join(root, 'a-file'), 'not a repository');
+  assert.deepEqual(unregisteredSiblings(root, ['ledger', 'identity']), ['somebody-elses-repo']);
+  assert.deepEqual(unregisteredSiblings(root, ['ledger', 'identity', 'somebody-elses-repo']), []);
+  assert.deepEqual(unregisteredSiblings(path.join(root, 'nowhere'), []), [], 'no tree is not a finding');
 });
 
 test('every deployable resolves to a GHCR image under the org', () => {
@@ -153,7 +245,7 @@ test('managed repositories are resolved as siblings of this one, not by walking 
   // both micro/ and repos/ therefore starts outside the stack tree and can never climb back into
   // it — it answered with a directory two levels too high and reported all 43 repositories as
   // absent, with no error and an exit code of zero.
-  const org = repoByName('org');
+  const org = managedRepos().find((repo) => repo.name === 'org');
   assert.ok(org);
   assert.equal(inspect(org).dir, path.join(microRoot(), 'org'));
 
