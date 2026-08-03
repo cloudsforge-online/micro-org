@@ -20,7 +20,10 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const WORKFLOW = readFileSync(
@@ -55,11 +58,99 @@ test('both the runtime and the test variable are exported, because they are read
   assert.match(WORKFLOW, /export "\$test_var=\$CI_DSN"/)
 })
 
+/**
+ * The skip scan's own shell, lifted out of the workflow and run — not a second copy of it.
+ *
+ * It used to be asserted as a literal grep, which is the weakest thing a test can do to a rule:
+ * it pinned the pattern and said nothing about what the pattern decides. The pattern was wrong,
+ * and the test could not have noticed, because the test WAS the pattern.
+ */
+const SKIP_SCAN = (() => {
+  const from = WORKFLOW.indexOf('            reported=$(grep')
+  const marker = `            done < <(printf '%s\\n' "$reported")`
+  const to = WORKFLOW.indexOf(marker)
+  assert.ok(from > 0 && to > from, 'the skip scan has moved or been renamed in service-ci.yml')
+  // Dedented to column zero. The block is a YAML scalar, so it carries the file's indentation.
+  return WORKFLOW.slice(from, to + marker.length)
+    .split('\n')
+    .map((line) => line.replace(/^ {12}/, ''))
+    .join('\n')
+})()
+
+/**
+ * Run the real classification over one captured run, and say what it decided.
+ *
+ * `blind` is the fatal case — this service's own database was absent and nothing ran.
+ * `standdown` is the cross-service case — a tier needing a SECOND service's database.
+ */
+function classify(testVar: string, output: string): { blind: string; standdown: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'skipscan-'))
+  const file = join(dir, 'test-output.txt')
+  writeFileSync(file, output)
+  // The scan reads the path the workflow tees to. Substituting it is the only edit made to the
+  // lifted shell, and it is asserted rather than assumed: grading the wrong file would silently
+  // classify an empty run as clean and pass every case below.
+  const script = SKIP_SCAN.replaceAll('/tmp/test-output.txt', file)
+  assert.ok(script.includes(file), 'the lifted scan no longer reads /tmp/test-output.txt')
+  const res = spawnSync(
+    'bash',
+    ['-c', `set -uo pipefail\ntest_var="${testVar}"\n${script}\nprintf 'BLIND<%s>STANDDOWN<%s>' "$blind" "$standdown"`],
+    { encoding: 'utf8' },
+  )
+  assert.equal(res.status, 0, `the scan itself failed to run: ${res.stderr}`)
+  const parsed = /BLIND<([\s\S]*)>STANDDOWN<([\s\S]*)>/.exec(res.stdout)
+  assert.ok(parsed, `the scan produced no verdict: ${res.stdout} ${res.stderr}`)
+  return { blind: parsed[1] ?? '', standdown: parsed[2] ?? '' }
+}
+
 test('a skipped database suite fails the build rather than passing quietly', () => {
   // This is the whole point. A green run that skipped its database tests is worse than a red one,
   // because it is believed.
   assert.match(WORKFLOW, /database-backed tests SKIPPED/)
-  assert.match(WORKFLOW, /grep -qiE 'set \[A-Z_\]\*TEST_DATABASE_URL\|database tests are disabled'/)
+
+  // The disaster, in both the phrasings the estate's suites actually produce.
+  const named = classify('LEDGER_TEST_DATABASE_URL', '↷ balances # set LEDGER_TEST_DATABASE_URL (name must contain "test")\n')
+  assert.match(named.blind, /LEDGER_TEST_DATABASE_URL/, "the service's own DSN missing must be fatal")
+  assert.equal(named.standdown, '')
+
+  const unnamed = classify('CUSTODY_TEST_DATABASE_URL', 'database tests are disabled\n')
+  assert.match(unnamed.blind, /disabled/, 'a skip naming no variable at all must be fatal')
+
+  // A clean run is neither.
+  const clean = classify('LEDGER_TEST_DATABASE_URL', 'ℹ tests 195\nℹ pass 195\n')
+  assert.equal(clean.blind, '')
+  assert.equal(clean.standdown, '')
+})
+
+test('a cross-service tier standing down is reported, not failed and not swallowed', () => {
+  // `[A-Z_]*TEST_DATABASE_URL` matched ANY service's variable, so micro-ledger went red on a run
+  // where 191 of 195 tests passed, none failed, and every case needing ledger's own database ran
+  // against the real Postgres this workflow provides. What stood down was four cases wanting a
+  // micro-indexer database as well — a second database no single-service job can offer.
+  const ledger = classify(
+    'LEDGER_TEST_DATABASE_URL',
+    '↷ backing # set INDEXER_TEST_DATABASE_URL (name must contain "test") with a micro-indexer checkout beside this one\n',
+  )
+  assert.equal(ledger.blind, '', 'a tier wanting another service\'s database is not this service failing')
+  assert.match(ledger.standdown, /INDEXER_TEST_DATABASE_URL/, 'and it must still be visible in the log')
+
+  // micro-indexer's message names BOTH variables in one sentence. That is a stand-down too: this
+  // job exports the own half itself, so the own half cannot be why anything skipped.
+  const indexer = classify(
+    'INDEXER_TEST_DATABASE_URL',
+    '↷ chain backing # set INDEXER_TEST_DATABASE_URL and LEDGER_TEST_DATABASE_URL (both names must contain "test")\n',
+  )
+  assert.equal(indexer.blind, '')
+  assert.match(indexer.standdown, /LEDGER_TEST_DATABASE_URL/)
+
+  // Both at once must still be fatal. This is the line between precision and weakening: the
+  // stand-down must not become an excuse that swallows a real blind run happening beside it.
+  const both = classify(
+    'LEDGER_TEST_DATABASE_URL',
+    '↷ a # set INDEXER_TEST_DATABASE_URL (name must contain "test")\n↷ b # set LEDGER_TEST_DATABASE_URL (name must contain "test")\n',
+  )
+  assert.match(both.blind, /LEDGER_TEST_DATABASE_URL/, 'a real skip beside a stand-down is still a red build')
+  assert.match(both.standdown, /INDEXER_TEST_DATABASE_URL/)
 })
 
 /* ------------------------------ the sibling runtime ------------------------------- */

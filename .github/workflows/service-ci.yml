@@ -772,11 +772,59 @@ jobs:
           ${{ inputs.package-manager }} run test 2>&1 | tee /tmp/test-output.txt
           status=$?
 
+          # THE SKIP SCAN, AND WHY IT IS NO LONGER ONE GREP.
+          #
+          # The pattern was `set [A-Z_]*TEST_DATABASE_URL`, and the wildcard matched ANY service's
+          # DSN name rather than the one this job exports. So it could not tell the disaster it was
+          # written for — this service's own database absent, nothing ran, green would have been a
+          # lie — from a cross-service tier standing down, which is a different thing entirely.
+          #
+          # micro-ledger is where it bit: 195 tests, 191 passing, 0 failing, every database-backed
+          # case run against the real Postgres this job provides — and red, because four cases in
+          # `chainbacking.test.ts` are gated on `INDEXER_TEST_DATABASE_URL` and a micro-indexer
+          # checkout beside it. `INDEXER_` satisfies `[A-Z_]*` exactly as well as `LEDGER_` does.
+          # Four repositories carry such a tier today: ledger, indexer, conformance and
+          # service-template.
+          #
+          # So each reporting line is read for the variables it NAMES, and judged:
+          #
+          #   * names a variable other than the one exported here → a cross-service tier stood
+          #     down. NOT a failure — this job provides one database and that tier needs two — but
+          #     not silence either. It is surfaced as a notice, because an estate-level integration
+          #     that is not being exercised is information, and a skip nobody can see is how this
+          #     file's own rules keep discovering they had blind spots.
+          #   * names only this service's variable, or names none at all ("database tests are
+          #     disabled") → the original disaster, unchanged and still fatal.
+          #
+          # A line naming BOTH counts as a stand-down, and that is sound rather than lenient:
+          # `indexer/src/chainbacking.test.ts:79` prints both names in one sentence, and this job
+          # has just exported the own half itself, so the own half cannot be why anything skipped.
           if [ "$NEEDS_DB" = "true" ]; then
-            if grep -qiE 'set [A-Z_]*TEST_DATABASE_URL|database tests are disabled' /tmp/test-output.txt; then
+            reported=$(grep -iE 'set [A-Z_]*TEST_DATABASE_URL|database tests are disabled' /tmp/test-output.txt | sort -u || true)
+            blind=''
+            standdown=''
+            while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              named=$(printf '%s\n' "$line" | grep -oE '[A-Z][A-Z_]*_TEST_DATABASE_URL' | sort -u || true)
+              foreign=$(printf '%s\n' "$named" | grep -vxF "$test_var" || true)
+              if [ -n "$foreign" ]; then
+                standdown="${standdown}${line}"$'\n'
+              else
+                blind="${blind}${line}"$'\n'
+              fi
+            done < <(printf '%s\n' "$reported")
+
+            if [ -n "$standdown" ]; then
+              echo "::notice::a cross-service test tier stood down — it needs a database this job does not provide"
+              printf '%s' "$standdown"
+              echo "This is not a failure: ${SERVICE}'s own database-backed suite ran. It is recorded"
+              echo "because an estate-level integration that CI never exercises is worth knowing about."
+            fi
+            if [ -n "$blind" ]; then
               echo "::error::the database-backed tests SKIPPED — CI would have gone green without running them"
+              printf '%s' "$blind"
               echo "The suite could not see a usable DSN. It must contain 'test' in the database name;"
-              echo "check that this service reads <SERVICE>_TEST_DATABASE_URL and that inputs.service matches."
+              echo "check that this service reads ${test_var} and that inputs.service matches."
               exit 1
             fi
           fi
