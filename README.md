@@ -8,7 +8,7 @@ repositories in 03 §1, seventy in the organisation today — and stated the cos
 plainly: a `@cloudsforge/contracts-*` minor bump
 would otherwise be ~48 file edits, 24 manual publishes, and no CI anywhere able to test the
 composed system. AD-02 and AD-03 are the machinery that pays that cost, and
-[`docs/ecosystem/03-repository-responsibilities.md`](../../docs/ecosystem/03-repository-responsibilities.md)
+[`docs/ecosystem/03-repository-responsibilities.md`](https://github.com/cloudsforge-online/micro-docs/blob/main/ecosystem/03-repository-responsibilities.md)
 §5 is explicit about what happens if it is not working:
 
 > **If this machinery is not working, no repository may be split.**
@@ -98,3 +98,10 @@ fails when the outbox row was not written.
 TypeScript ESM, Node ≥22, `.ts` relative imports, `node:test`, no framework. Comments explain
 **why** — a comment restating the code is a comment that will be wrong after the next edit and
 will be believed anyway.
+
+---
+
+## Provenance
+
+The code in this repository was written by **Claude Opus 5** and **Claude Fable 5**, under
+human direction and review.
