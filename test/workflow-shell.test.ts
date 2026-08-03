@@ -433,6 +433,21 @@ test.after(() => rmSync(AUDIT_DIR, { recursive: true, force: true }))
 describe('estate-ci sweeps the whole estate, or says so', () => {
   const yaml = readFileSync(DIR + 'estate-ci.yml', 'utf8')
 
+  /**
+   * One step, from its `- name:` to the next one — not to a step named further down.
+   *
+   * A slice ending at a hard-coded later step grows silently when something is inserted between the
+   * two, and every assertion in these tests is a `match`, so it keeps passing while grading a
+   * subject twice the size of the one it names.
+   */
+  const stepNamed = (name: string): string => {
+    const at = yaml.indexOf(`- name: ${name}`)
+    assert.notEqual(at, -1, `no step named '${name}' in estate-ci.yml`)
+    const rest = yaml.slice(at + 1)
+    const next = rest.indexOf('\n      - name: ')
+    return next === -1 ? rest : rest.slice(0, next)
+  }
+
   it('derives the repository list instead of writing one down', () => {
     // tools/registry.ts lists 46 repositories and does NOT contain micro-emberkin, which is one of
     // the three repositories the account defect was actually found in. A hand-maintained list would
@@ -518,8 +533,11 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
     // weeks while the sweep printed "everything else reconciles". Exit codes could never find it:
     // the sweep was red the whole time for unrelated findings. Only an injection whose ABSENCE from
     // the output is the failure can.
-    const step = yaml.slice(yaml.indexOf('- name: The canary — the topic sweep can still go red'))
-    const canary = step.slice(0, step.indexOf('- name: The registry, the producers'))
+    // Ends at the NEXT step, whatever it is. It used to end at 'The registry, the producers', which
+    // stopped being the next step the moment the raw-insert canary was added between them — and
+    // every assertion below is a `match`, so the slice silently grew to two steps and went on
+    // passing. A test whose subject can quietly change size is not testing the subject it names.
+    const canary = stepNamed('The canary — the topic sweep can still go red')
     assert.match(canary, /__estate_ci_record_canary\.ts/, 'the record structure must actually be planted')
     assert.match(canary, /UNPRODUCED_NOTIFICATIONS/, 'and under the name direction 4 reads BY NAME')
     // The three shapes, each one a thing the old scan could not read.
@@ -542,6 +560,44 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
       assert.ok(canary.includes(topic), `${topic} must be one of the names the canary demands back`)
     }
     assert.match(canary, /rm -f "\$emitter" "\$record"/, 'and the record must be proven gone before the real sweep')
+  })
+
+  it('the raw-insert canary plants a constant in the topic column, and is graded in two passes', () => {
+    // Not every emit reaches the bus through a `topic:` property. ledger/src/entries.ts:439 writes
+    // the outbox row in SQL and names the topic with the constant at entries.ts:199 — for the
+    // express reason that a constant is reachable from ledger's own topics.ts and an inlined string
+    // is not. The raw-insert path read a LITERAL there and bailed on anything opening `${`, so the
+    // estate's most-consumed topic left the emitted set the day ledger named it, and the sweep said
+    // "the repair is an emit, not a rename" about a service that emits it. The sibling path had
+    // resolved identifiers since its first run: one tool, two answers to what an emit is.
+    const canary = stepNamed('The canary — the raw-insert emit path can still resolve a constant')
+    // The injected emit must be the shape that went invisible — a raw INSERT whose topic column is
+    // an identifier — and it must carry no `topic:` property, or it would prove the other path.
+    assert.match(canary, /insert into outbox \(topic, key, producer, version, actor, correlation_id, payload\)/)
+    assert.match(canary, /values \(\$\{ESTATE_CI_OUTBOX_TOPIC\}, 'canary'/, 'the topic column must be a CONSTANT')
+    assert.doesNotMatch(canary, /topic: '/, 'a `topic:` property here would grade the path that never broke')
+    // PASS 1: found. Graded on direction 4 naming the injected emit FILE, which it can only print if
+    // the raw insert resolved through the constant.
+    assert.match(canary, /grep -q 'and identity emits it at identity\/src\/__estate_ci_outbox_canary\.ts'/)
+    // PASS 2: the same tree minus one file, so the difference is attributable to the emit alone.
+    assert.match(canary, /rm -f "\$emitter"\n/, 'the second pass must differ by exactly the emit file')
+    assert.match(canary, /outbox-canary-seen\.txt/)
+    assert.match(canary, /outbox-canary-gone\.txt/)
+    assert.match(
+      canary,
+      /grep -q 'identity\.canary\.outboxed: registered, and no `topic:` in identity\/src ever names it'/,
+      'the red must be graded on the name, not the exit code',
+    )
+    // THE REASON THERE ARE TWO PASSES AND NOT AN EXIT CODE: run against the checker as it was, BOTH
+    // passes exit 1 — the estate is red for unrelated findings either way — so an exit-code grade is
+    // satisfied by the very defect this canary exists to catch.
+    assert.doesNotMatch(
+      canary,
+      /if \[ "\$seen" -ne 0 \]/,
+      'pass 1 may not be graded on its exit code: this sweep is red on a healthy estate too',
+    )
+    assert.match(canary, /the injections were not written/, 'a canary that grades an unchanged tree grades nothing')
+    assert.match(canary, /an injection survived/, 'and the tree must be proven restored before the real sweep')
   })
 
   it('the scope union is built by service-ci.yml own derivation, not a copy of it', () => {
@@ -582,8 +638,20 @@ test('every recorded estate topic gap names an owner, its evidence, and why it i
   const parsed = JSON.parse(raw) as {
     gaps: Record<string, { owner?: string; evidence?: string; status?: string; until?: string; recordedAt?: string }>
   }
-  const keys = Object.keys(parsed.gaps)
-  assert.ok(keys.length > 0, 'an empty ledger means the estate reconciles — delete this test then, deliberately')
+  // EMPTY IS A LEGAL STATE, and this used to assert it was not — 'an empty ledger means the estate
+  // reconciles, delete this test then'. It does not mean that, and on 2026-08-03 it went red for
+  // being right: the last two records were deleted because micro-ledger wrote the missing emit and
+  // micro-mint made the rename, which is the ratchet working exactly as the file's header argues it
+  // should. A test that fails when the estate is repaired teaches people to keep a record alive.
+  //
+  // What that assertion was really guarding is worth keeping, because it is this repository's own
+  // signature defect: if `gaps` is renamed or mistyped, `Object.entries(undefined ?? {})` is empty,
+  // every per-record assertion below runs zero times, and the test passes while checking nothing.
+  // So the STRUCTURE is asserted instead of the contents.
+  assert.ok(
+    parsed.gaps !== null && typeof parsed.gaps === 'object' && !Array.isArray(parsed.gaps),
+    'estate-topic-gaps.json must hold a `gaps` object — without one the loop below asserts nothing about zero records and passes',
+  )
   // The kinds estate-topics.mjs can actually produce. `stale:x` used to parse, sit in the file
   // looking like a known issue, and surface only as "no longer describes the estate — delete it":
   // the message for a gap that has been FIXED, on a record that never described anything.

@@ -752,6 +752,117 @@ jobs:
           fi
           echo "ok: the sweep exited ${code} and named every injection — names, reachability AND the record structures are being measured"
 
+      # THE FOURTH INJECTION IS A REGRESSION TEST FOR THE OTHER EMIT SHAPE, AND IT NEEDS TWO PASSES.
+      #
+      # Not every emit reaches the bus through a `topic:` property. `ledger/src/entries.ts:439`
+      # writes the outbox row itself, in SQL, and names the topic with the constant declared at
+      # entries.ts:199 — `values (${ENTRY_POSTED}, …)` — for the express reason that a constant is
+      # reachable from ledger's own topics.ts and an inlined string is not. The raw-insert path was
+      # written to read a LITERAL there and bailed on anything opening `${`, a rule meant for the
+      # shared pump's `${event.topic}`. So the estate's most-consumed topic left the emitted set the
+      # day ledger named it, and the sweep reported "no `topic:` in ledger/src ever names it … the
+      # repair is an emit, not a rename" about a service that emits it.
+      #
+      # That is the signature defect a THIRD time in one file — the sibling path had resolved
+      # identifiers and members since its first run, so the tool disagreed with itself about what an
+      # emit is — and the first two were caught by canaries rather than by reading. This one is
+      # graded in two passes because the two halves of the claim are different questions:
+      #
+      #   PASS 1, the emit present: the sweep must SEE it. Graded on direction 4 naming the injected
+      #     emit FILE — `and identity emits it at identity/src/__estate_ci_outbox_canary.ts` — which
+      #     it can only print if the raw insert resolved through the constant, and on direction 1
+      #     NOT calling the topic unemitted. Nothing here is graded on the exit code: this sweep is
+      #     red on a healthy estate too, so an exit code would be satisfied by a broken checkout.
+      #   PASS 2, the same tree with only the emit file deleted: the sweep must go RED and say so by
+      #     name. This is the control. Without it, pass 1's signal could come from anything in the
+      #     estate that happens to mention that path, and a canary that cannot be made to fail is
+      #     the thing this job exists not to be.
+      - name: The canary — the raw-insert emit path can still resolve a constant
+        if: always()
+        run: |
+          set -uo pipefail
+          registry="${ESTATE}/contracts/packages/events/src/index.ts"
+          emitter="${ESTATE}/identity/src/__estate_ci_outbox_canary.ts"
+          record="${ESTATE}/notify/src/__estate_ci_outbox_record_canary.ts"
+          if [ ! -f "$registry" ] || [ ! -d "${ESTATE}/identity/src" ] || [ ! -d "${ESTATE}/notify/src" ]; then
+            echo "::error::the events registry, micro-identity or micro-notify is missing from this checkout — the canary cannot be planted"
+            exit 1
+          fi
+          cp "$registry" "${RUNNER_TEMP}/events-index.outbox.orig"
+
+          # (a) the topic, registered to identity — so direction 1 has something to miss in pass 2.
+          sed "s|^export const TOPICS = Object.freeze({|&\n  'identity.canary.outboxed': Object.freeze({ producer: 'identity', payloadType: 'CanaryOutboxed', version: '1.0', keyedBy: 'user_id', description: 'Injected by estate-ci and removed a few lines later.' }),|" \
+            "${RUNNER_TEMP}/events-index.outbox.orig" > "$registry"
+          # (b) the emit, in the shape that went invisible: a raw outbox INSERT whose topic column is
+          #     a CONSTANT, with no `topic:` property anywhere in the file. The re-export keeps
+          #     direction 5 quiet, so the only thing this canary can be graded on is the resolution.
+          cat > "$emitter" <<'EMITTER'
+          const ESTATE_CI_OUTBOX_TOPIC = 'identity.canary.outboxed'
+          export async function estateCiOutboxCanary(tx: any): Promise<void> {
+          await tx`
+          insert into outbox (topic, key, producer, version, actor, correlation_id, payload)
+          values (${ESTATE_CI_OUTBOX_TOPIC}, 'canary', 'identity', 1, null, null, ${tx.json({})})
+          `
+          }
+          export const estateCiOutboxCanaryRef = estateCiOutboxCanary
+          EMITTER
+          # (c) a record saying that fact is not produced. Direction 4 is the only verdict that
+          #     prints the EMIT SITE for a topic that has one, and the file path is the grade.
+          cat > "$record" <<'RECORD'
+          export const UNPRODUCED_NOTIFICATIONS = [
+          { requirement: 'estate-ci canary, an outbox insert naming its topic with a constant', emits: 'identity.canary.outboxed' },
+          ]
+          RECORD
+
+          if ! grep -q 'identity.canary.outboxed' "$registry" || [ ! -s "$emitter" ] || [ ! -s "$record" ]; then
+            echo "::error::the injections were not written — a canary that grades an unchanged tree grades nothing"
+            exit 1
+          fi
+
+          set +e
+          node "${TOOLS}/tools/estate-topics.mjs" "$ESTATE" "${TOOLS}/tools/estate-topic-gaps.json" \
+            > "${RUNNER_TEMP}/outbox-canary-seen.txt" 2>&1
+          seen=$?
+          # PASS 2 is the same tree minus one file, so the difference between the two outputs is
+          # attributable to the emit and to nothing else in fifty-eight repositories.
+          rm -f "$emitter"
+          node "${TOOLS}/tools/estate-topics.mjs" "$ESTATE" "${TOOLS}/tools/estate-topic-gaps.json" \
+            > "${RUNNER_TEMP}/outbox-canary-gone.txt" 2>&1
+          gone=$?
+          set -e
+          cp "${RUNNER_TEMP}/events-index.outbox.orig" "$registry"
+          rm -f "$record"
+          if grep -q 'identity.canary.outboxed' "$registry" || [ -e "$emitter" ] || [ -e "$record" ]; then
+            echo "::error::an injection survived, so the real sweep below would judge a tree this job broke"
+            exit 1
+          fi
+
+          missed=0
+          # PASS 1 — it must be FOUND.
+          grep -q 'and identity emits it at identity/src/__estate_ci_outbox_canary.ts' "${RUNNER_TEMP}/outbox-canary-seen.txt" \
+            || { echo "::error::the emit was planted as a raw \`insert into outbox\` naming its topic with a constant, and the sweep did not resolve it — this is ledger.entry.posted disappearing again"; missed=1; }
+          if grep -q 'identity.canary.outboxed: registered, and no' "${RUNNER_TEMP}/outbox-canary-seen.txt"; then
+            echo "::error::the sweep called the injected topic unemitted while the emit was on disk — the two emit shapes disagree about what an emit is"
+            missed=1
+          fi
+          # PASS 2 — and removing it must go red, by name.
+          if [ "$gone" -eq 0 ]; then
+            echo "::error::the sweep stayed GREEN with a registered topic whose only emit had just been deleted"
+            missed=1
+          fi
+          grep -q 'identity.canary.outboxed: registered, and no `topic:` in identity/src ever names it' "${RUNNER_TEMP}/outbox-canary-gone.txt" \
+            || { echo "::error::red without the injected topic in it — an exit code alone is satisfied by a broken checkout, which is why it is not the grade"; missed=1; }
+          if grep -q '__estate_ci_outbox_canary.ts' "${RUNNER_TEMP}/outbox-canary-gone.txt"; then
+            echo "::error::the deleted emit file is still named in the output — the two passes are not reading the tree this step wrote"
+            missed=1
+          fi
+          if [ "$missed" -ne 0 ]; then
+            echo "--- with the emit (exit ${seen}) ---"; cat "${RUNNER_TEMP}/outbox-canary-seen.txt"
+            echo "--- without it (exit ${gone}) ---";   cat "${RUNNER_TEMP}/outbox-canary-gone.txt"
+            exit 1
+          fi
+          echo "ok: the raw-insert path resolved a constant (exit ${seen}), and lost the topic by name when the emit went (exit ${gone})"
+
       - name: The registry, the producers and the consumers agree about the bus
         if: always()
         run: |

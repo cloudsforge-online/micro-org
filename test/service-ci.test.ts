@@ -132,7 +132,24 @@ test('the service\'s declared configuration reaches the smoke container', () => 
 test('the poll stops early once the container has exited rather than waiting the full window', () => {
   // A container that crashed on its config will never answer; the old loop slept the whole thirty
   // seconds regardless, turning a fast failure into a slow one with no extra signal.
-  assert.match(IMAGE_JOB, /docker ps --format '\{\{\.Names\}\}' \| grep -qx "\$name" \|\| break/)
+  //
+  // ASKED OF DOCKER RATHER THAN GREPPED OUT OF A PIPE. This asserted the pipe version until it went
+  // red, because service-ci.yml:1218 replaced it and this line was not moved with it. The pipe is a
+  // SIGPIPE race under `set -uo pipefail`: `grep -q` exits the instant it matches, the writer gets
+  // EPIPE, pipefail makes the pipeline non-zero, the loop breaks, and the step reports "the image
+  // never answered /livez" about a container that was answering. It is in the reusable workflow
+  // every service calls, so it reads as flaky infrastructure rather than one fixable line.
+  //
+  // The old shape is asserted ABSENT as well as the new one present: a test that only looks for the
+  // replacement would pass on a file that reintroduced the race somewhere else in the same job.
+  assert.match(IMAGE_JOB, /\[ -n "\$\(docker ps --quiet --filter "name=\^\$\{name\}\$"\)" \] \|\| break/)
+  // Comments out first. The workflow QUOTES the old pipe in the paragraph explaining why it is
+  // gone, and a guard that fires on the prose describing the fix is the failure mode six other
+  // guards in this estate have already had.
+  const code = IMAGE_JOB.split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+  assert.doesNotMatch(code, /docker ps[^\n]*\|[^|\n]*grep/)
 })
 
 test('a service with no database keeps the bridge-network path and needs no migrate', () => {
