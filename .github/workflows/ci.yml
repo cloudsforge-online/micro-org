@@ -14,13 +14,38 @@ jobs:
   check:
     name: The machinery works
     runs-on: ubuntu-latest
+    # CHECKED OUT AS `org`, NOT AS `micro-org`, AND THE NAME IS LOAD-BEARING.
+    #
+    # `cfctl` resolves every repository as a SIBLING NAMED BY ITS LOCAL NAME — `repoDir` is
+    # `microRoot()/<row.name>` (tools/cfctl.ts:86-88) and `microRoot()` is the checkout's parent
+    # (:69-72). GitHub's default layout is `/home/runner/work/micro-org/micro-org`, so the parent
+    # held one directory called `micro-org`, which is a remote name and matches no registry row.
+    # `doctor` correctly reported it as a repository on this disk that the registry does not name,
+    # and failed — for a checkout layout, not for anything wrong with the estate.
+    #
+    # It had never been seen, because `pnpm test` failed first and the step never ran. When the
+    # suite went green the step behind it went red the same hour.
+    #
+    # The fix gives the tool the layout it is written for rather than teaching the tool that
+    # `micro-org` means `org`, which would make a genuinely unregistered checkout pass under any
+    # name carrying the prefix. In this layout `doctor` audits a real estate that happens to have
+    # one repository present, so a registry that lost its own `org` row still fails here.
+    defaults:
+      run:
+        working-directory: org
     steps:
       - uses: actions/checkout@v4
+        with: { path: org }
       - uses: pnpm/action-setup@v4
+        with:
+          # Pinned for the same reason service-ci.yml pins it (:163-169): package.json is in org/
+          # now, and pnpm/action-setup looks in the working directory for the packageManager field.
+          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: pnpm
+          cache-dependency-path: org/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       # The compatibility checker is the only thing standing between an edited contract and a
@@ -28,11 +53,14 @@ jobs:
       # specification of what 'additive' means.
       - run: pnpm test
 
+      # The output is NOT sent to /dev/null. It used to be, and that is why this step failed with
+      # exit 1 and not one line saying what it had found — a check whose failure carries no
+      # diagnosis costs more than it saves, and this one cost an hour.
       - name: The tools run
         run: |
           set -euo pipefail
-          node --import tsx tools/cfctl.ts list > /dev/null
-          node --import tsx tools/cfctl.ts doctor > /dev/null
+          node --import tsx tools/cfctl.ts list
+          node --import tsx tools/cfctl.ts doctor
           echo "ok: cfctl list and doctor run"
 
       # A reusable workflow that does not parse is discovered by the repository that calls it,
