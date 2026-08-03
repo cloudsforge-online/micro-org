@@ -301,17 +301,6 @@ jobs:
           fi
           echo "ok: the sweep exited ${code} and named the injected account — the gate can fail"
 
-      # TEMPORARY — REVERTED IN THE NEXT COMMIT. The canary above proves the SWEEP goes red; nothing
-      # yet has proved that the JOB's failure path works — that a red verdict reaches the issue that
-      # is this design's whole answer to "a nightly red nobody owns". So this plants the same
-      # known-bad account and leaves it, once, on main, on purpose. The red run it produces stays in
-      # this repository's history as a fact.
-      - name: TEMPORARY — leave the defect in place to prove the failure path
-        run: |
-          set -uo pipefail
-          printf '%s\n' "export const canary = { subject: 'platform', assetCode: 'EMBER', purpose: 'fees', type: 'expense' }" \
-            > "${ESTATE}/ledger/src/__estate_ci_canary.ts"
-
       # `always()` so the estate still gets a verdict when the canary is what broke. The two answers
       # are different questions — "does the machinery work" and "does the estate agree" — and a run
       # that reports only the first is a run that hides the second.
