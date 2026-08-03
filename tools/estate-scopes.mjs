@@ -2,6 +2,24 @@
 //
 //   usage: node tools/estate-scopes.mjs <estate-dir> <scope-audit.mjs> [--json]
 //
+// `<scope-audit.mjs>` IS NOT A FILE IN THIS REPOSITORY, which is why this line used to be unusable
+// by anyone who was not already `estate-ci.yml`. It is service-ci.yml's OWN scope derivation, which
+// lives in that workflow inside a `SCOPE_AUDIT_SCRIPT` heredoc — see THE DERIVATION IS NOT
+// REIMPLEMENTED HERE below for why it is passed in rather than copied. `.github/workflows/
+// estate-ci.yml` extracts it in the step "Take the scope derivation out of service-ci.yml"; by hand
+// it is the same two commands, from the root of micro-org:
+//
+//     awk "/<<'SCOPE_AUDIT_SCRIPT'/{f=1;next} /^ *SCOPE_AUDIT_SCRIPT\$/{f=0} f" \
+//       .github/workflows/service-ci.yml | sed 's/^          //' > /tmp/scope-audit.mjs
+//     node tools/estate-scopes.mjs ../ /tmp/scope-audit.mjs
+//
+// It is NOT defaulted to that, and the reason is the argument this whole file is built on. A default
+// would put a second copy of the extraction here, and estate-ci.yml would go on using its own step —
+// so the defaulted path would be the one branch of this tool NO CANARY EVER RUNS. Every verdict
+// below has the form "nothing demands this scope", which is exactly what a derivation that quietly
+// stopped working produces, and an unexercised fallback is how one gets there. Naming where the
+// argument comes from costs nothing and rots into nothing.
+//
 // `service-ci.yml` proves **demands ⊆ registry**, one repository at a time: a gate asking for a
 // scope `@cloudsforge/contracts-auth` does not name fails that repository's build, because identity
 // would refuse to mint it (identity/src/env.ts:141). That is half of totality and it is the half a
@@ -26,7 +44,19 @@ import { join } from 'node:path'
 
 const [, , estate, auditPath, ...flags] = process.argv
 if (!estate || !auditPath) {
+  // The header explains why this is not defaulted. What a person hitting this needs is not that
+  // argument, it is the two commands, so they are here rather than only in a comment they are not
+  // currently reading.
   console.error('usage: estate-scopes.mjs <estate-dir> <scope-audit.mjs> [--json]')
+  console.error('')
+  console.error('<scope-audit.mjs> is service-ci.yml\'s own scope derivation, not a file in this repository.')
+  console.error('Extract it first, from the root of micro-org:')
+  console.error('')
+  console.error('  awk "/<<\'SCOPE_AUDIT_SCRIPT\'/{f=1;next} /^ *SCOPE_AUDIT_SCRIPT\\$/{f=0} f" \\')
+  console.error("    .github/workflows/service-ci.yml | sed 's/^          //' > /tmp/scope-audit.mjs")
+  console.error('  node tools/estate-scopes.mjs <estate-dir> /tmp/scope-audit.mjs')
+  console.error('')
+  console.error('estate-ci.yml does the same in its "Take the scope derivation out of service-ci.yml" step.')
   process.exit(2)
 }
 const json = flags.includes('--json')

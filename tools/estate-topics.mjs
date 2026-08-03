@@ -802,8 +802,21 @@ const gaps = new Map()
  * known issue, and surfaced only as "no longer describes the estate — delete it" at the bottom of a
  * run: the message for a gap that has been FIXED, on a record that never described anything. Two
  * opposite states, one sentence. The set is closed here so a typo is named as a typo.
+ *
+ * `unreachable` IS NEW, AND DIRECTION 5 COULD NOT BE RECORDED AT ALL BEFORE IT. Directions 1–4 go
+ * through `record()`; direction 5 pushed straight onto `errors`, so an unreferenced emitter was the
+ * one finding in this file with no way to carry evidence, an owner, a date or an `until`. That is
+ * not a stricter check, it is a check with only one escape: fix it, or switch the step off — and
+ * the header of the gap file is an argument about what happens to a red nobody can fix. It bit on
+ * `tessera.object.anchored`, whose producer cannot be called because a Solidity contract has never
+ * been written, four repositories away, while its consumer sits complete and waiting. "Delete the
+ * emitter" and "wait for the chain" are two answers and the file could hold neither.
+ *
+ * It is keyed BY THE TOPIC, like every other kind, because that is what the finding is about: a
+ * function name is a fact about one repository's source and a topic is the thing two repositories
+ * disagree over. An emitter naming two topics is two findings, and each closes on its own.
  */
-const KINDS = new Set(['unemitted', 'unregistered', 'unproduced', 'stale-record'])
+const KINDS = new Set(['unemitted', 'unregistered', 'unproduced', 'stale-record', 'unreachable'])
 
 /**
  * Why a record is still here — and it is not one question, which is what the first nine got wrong.
@@ -1014,6 +1027,12 @@ for (const repo of repos) {
  *
  * It is a syntactic proxy and says so: it catches an emitter with no caller, and it does not prove
  * the caller is itself reachable. A chain of dead functions calling each other satisfies it.
+ *
+ * IT REPORTS THE TOPICS, NOT JUST THE FUNCTION, and that is what made it recordable. This was the
+ * only direction whose findings never reached `record()` — see `unreachable` at KINDS — and the
+ * reason was structural rather than deliberate: it had thrown the topic away one line into the
+ * function, at `for (const [, where] of EMITS…)`, so there was nothing to key a record by. The
+ * topic was always there; it was discarded by a destructuring hole.
  */
 function unreferencedEmitters(repo) {
   const files = sources.get(repo) ?? []
@@ -1021,15 +1040,21 @@ function unreferencedEmitters(repo) {
   // read the declaration text for `topic:` and called `describeTopic(topic: IdentityTopic)` an
   // emitter — it had matched a parameter's type annotation.
   const sites = []
-  for (const [, where] of EMITS.get(repo) ?? new Map()) for (const site of where) sites.push(site)
+  for (const [topic, where] of EMITS.get(repo) ?? new Map()) for (const site of where) sites.push({ ...site, topic })
   const emitters = []
   for (const file of files) {
     for (const match of file.text.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)) {
       const rest = file.text.slice(match.index)
       const end = rest.search(/\n\}/)
       const bodyEnd = match.index + (end === -1 ? rest.length : end)
-      if (sites.some((s) => s.file === file.path && s.offset > match.index && s.offset < bodyEnd)) {
-        emitters.push({ name: match[1], file: file.path, line: lineOf(file.text, match.index) })
+      const inBody = sites.filter((s) => s.file === file.path && s.offset > match.index && s.offset < bodyEnd)
+      if (inBody.length > 0) {
+        emitters.push({
+          name: match[1],
+          file: file.path,
+          line: lineOf(file.text, match.index),
+          topics: [...new Set(inBody.map((s) => s.topic))].sort(),
+        })
       }
     }
   }
@@ -1043,17 +1068,24 @@ function unreferencedEmitters(repo) {
         references += 1
       }
     }
-    if (references === 0) dead.push(`${emitter.name} (${emitter.file}:${emitter.line})`)
+    if (references === 0) dead.push(emitter)
   }
-  return dead.sort()
+  return dead.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 for (const repo of repos) {
   if (!sources.has(repo)) continue
-  for (const dead of unreferencedEmitters(repo)) {
-    errors.push(
-      `${dead}: it emits, and nothing else in ${repo}/src refers to it. The topic has a producer on paper and none in the running service — emitSessionRevoked, again.`,
-    )
+  for (const emitter of unreferencedEmitters(repo)) {
+    // The function name stays in the message — it is the only thing that says WHERE to look, and
+    // estate-ci.yml's topic canary grades this direction by grepping for the injected emitter's
+    // name. One finding per topic, because that is the unit a record can close on.
+    for (const topic of emitter.topics) {
+      record(
+        topic,
+        'unreachable',
+        `${topic}: ${emitter.name} (${emitter.file}:${emitter.line}) emits it, and nothing else in ${repo}/src refers to ${emitter.name}. The topic has a producer on paper and none in the running service — emitSessionRevoked, again.`,
+      )
+    }
   }
 }
 
