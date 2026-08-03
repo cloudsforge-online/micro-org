@@ -97,11 +97,11 @@ name: estate-ci
 #     injection is asserted written before and asserted deleted after.
 #
 # ──────────────────────────────────────────────────────────────────────────────────────────────────
-# THE OTHER TWO INVARIANTS THIS JOB CARRIES
+# THE OTHER THREE INVARIANTS THIS JOB CARRIES
 #
-# Both were designed into the shape above and are a STEP each, not a new mechanism: the expensive
-# part is having all fifty-five repositories on one disk, and that has already happened by the time
-# the first verdict is read. Each is documented at its own step; in one line each —
+# All three were designed into the shape above and are a STEP each, not a new mechanism: the
+# expensive part is having all fifty-five repositories on one disk, and that has already happened by
+# the time the first verdict is read. Each is documented at its own step; in one line each —
 #
 #   2. THE SCOPE REGISTRY IS TOTAL. service-ci.yml proves demands ⊆ registry one repository at a
 #      time. registry ⊆ demands needs the union of every gate in the estate, which no repository has;
@@ -111,20 +111,32 @@ name: estate-ci
 #      each reconcile one repository against the registry. The registry is not the estate: a
 #      registered topic no producer emits, and an emitter no code calls, both pass every per-
 #      repository check there is.
+#   4. NO ROUTE IN ANY SERVICE CAN RETURN PRIVATE KEY MATERIAL. 498 routes over 29 servers, which is
+#      a fact about the estate and about no repository in it. It is the last open item of the P5
+#      migration exit gate (`17-definition-of-done.md` §5 item 4, which requires the property be
+#      asserted "by a response-body scan across the entire route surface, not by inspection").
 #
-# A FAILURE IN ONE DOES NOT STOP THE OTHERS. Every verdict step is `if: always()`. The three have
-# nothing to do with each other and share a checkout only because cloning it three times would be
-# absurd; stopping at the first would turn "the estate is wrong in three ways" into three nights of
+# A FAILURE IN ONE DOES NOT STOP THE OTHERS. Every verdict step is `if: always()`. The four have
+# nothing to do with each other and share a checkout only because cloning it four times would be
+# absurd; stopping at the first would turn "the estate is wrong in four ways" into four nights of
 # work, and would let a broken sweep hide a real disagreement behind it. The canaries are `always()`
 # for the same reason, and a canary failing does not suppress its own verdict: "does the machinery
 # work" and "does the estate agree" are different questions and a run must answer both.
 #
+# INVARIANT 4 IS THE ONE EXCEPTION TO THE SECOND HALF OF THAT, DELIBERATELY. Its canary and its
+# verdict both run and both are printed in full — but the verdict step FAILS when the canary did not
+# vouch, even if the scan was green. The other three canaries grade a sweep whose red is the
+# interesting answer; this one grades a sweep whose GREEN is the answer everybody will quote, and a
+# green produced by a checker just proven to be measuring nothing is not a pass, it is the exact
+# sentence this file exists to stop anybody writing down. Report both; trust neither.
+#
 # ──────────────────────────────────────────────────────────────────────────────────────────────────
 # WHAT THIS STILL CANNOT SEE
 #
-# ALL THREE: it reads `main`. A disagreement introduced on a branch is caught when it lands, not when
-# it is proposed — the price of mechanism 3 being unavailable. And it reads SOURCE: what a service
-# has already written to a production ledger, bus or token is outside every sweep here.
+# ALL FOUR: they read `main`. A disagreement introduced on a branch is caught when it lands, not when
+# it is proposed — the price of mechanism 3 being unavailable. And they read SOURCE: what a service
+# has already written to a production ledger, bus or token, or has already RETURNED down a socket, is
+# outside every sweep here.
 #
 # LEDGER ACCOUNTS: everything ledgeraccounts.ts's own header lists — anything not written as a
 # TypeScript object literal, and types decided at runtime.
@@ -153,6 +165,39 @@ name: estate-ci
 # structures direction 4 reads are named (`UNPRODUCED_NOTIFICATIONS`, `AWAITING_REGISTRATION`) and so
 # resolving identifiers inside them changes a known thing, while moving the quorum in fifty-six
 # repositories on a guess changes an unknown number of verdicts in both directions.
+#
+# KEY MATERIAL IN RESPONSE BODIES: this is the one whose blind spots are worth reading before quoting
+# its green, because its green is what the P5 exit gate will be closed on. It is a STATIC scan, and
+# the four things it cannot see are —
+#
+#   * A FOURTH ROUTE SPELLING. Three are read (`{ method, path, handle }`, `define(…)` and a helper
+#     `route(…)` whose name is not hard-coded). A `server.ts` that declares a route table and yields
+#     ZERO routes is fatal rather than silently zero, so a fourth spelling fails loudly in the service
+#     that introduces it — but a fourth spelling ADDED ALONGSIDE an existing one, in a file that still
+#     yields routes, is routes this scan never enumerated and never said so.
+#   * ALIASING AND MUTATION. `const out = {}; out.key = secret; return { body: out }` is not modelled.
+#     Nothing in the estate builds a body that way today, and it is THE LIKELIEST WAY A REAL LEAK
+#     WOULD SLIP PAST this check — the honest note is worth more than the green above it.
+#   * HEADERS NOT WRITTEN AS A LITERAL. A response header assembled at runtime is not read, so a key
+#     handed back in a header rather than a body is outside the scan.
+#   * RUNTIME PROVENANCE, and `main` only, like everything else in this file. It follows values the
+#     TypeScript compiler API can follow; a value whose origin is decided at runtime is printed as
+#     unreadable rather than judged, and 37 of them are (see the ratchet at the step).
+#
+# AND IT DOES NOT REPLACE `custody/src/bodyscan.test.ts`. THE TWO PROVE DIFFERENT THINGS AND BOTH
+# STAY. Custody's is DYNAMIC: it mints a key in every family, reads the plaintext out of the vault,
+# drives custody's routes and asserts no body contains any of it. That needs a fixture of REAL key
+# material, which only custody can produce — there is no private key in micro-market to compare a
+# body against, and twenty-four Postgres schemas plus a chain adapter per family would turn the DoD
+# item into a check nobody runs. So custody's proves the strong thing about ONE service; this proves
+# the weaker thing about ALL of them — that no route's response expression is reachable from a value
+# this analyser can identify as key material, under every input, including the error paths a dynamic
+# test only reaches if somebody wrote the failing request.
+#
+# NEITHER IS THE OTHER'S EVIDENCE. Deleting custody's because "estate-ci scans the bodies now" would
+# remove the only check in the estate that has ever compared a response against a real private key.
+# Deleting this because "custody tests its bodies" would leave twenty-eight other servers unread.
+# If you are here to remove one, you are removing the only proof of something.
 #
 # `tools/estate-topic-gaps.json` records the disagreements this sweep has found that micro-org cannot
 # fix — with evidence, an owning repository, and now a `status` saying whether the finding is simply
@@ -210,9 +255,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ONE JOB, ONE CHECKOUT, THREE INVARIANTS. Cloning the estate takes six seconds and three jobs
-  # would clone it three times to answer three questions about the same bytes. More than the waste,
-  # three checkouts are three chances to disagree about what "the estate" was at that moment.
+  # ONE JOB, ONE CHECKOUT, FOUR INVARIANTS. Cloning the estate takes six seconds and four jobs
+  # would clone it four times to answer four questions about the same bytes. More than the waste,
+  # four checkouts are four chances to disagree about what "the estate" was at that moment.
   estate-invariants:
     name: The invariants that belong to the estate and to no repository in it
     runs-on: ubuntu-latest
@@ -230,6 +275,22 @@ jobs:
       # repositories fails HERE, with a message that names the cause, rather than as "the sweep read
       # a partial checkout".
       MIN_REPOS: 45
+      # ── THE RATCHET FOR INVARIANT 4, AND IT LIVES HERE RATHER THAN IN THE CHECKER ON PURPOSE.
+      #
+      # 37 of the 113 routes in the four services that hold key material (custody, identity,
+      # devplatform, notify) have a response the body scan cannot fully account for. Every one is
+      # printed by `path:line` on every run, and each is a response that turns "no route returns key
+      # material" into "no route I could read returns key material" without a line of the check
+      # changing.
+      #
+      # micro-conformance holds the same number as `BASELINE_BLIND_ROUTES` and uses it as the
+      # subcommand's default. That is its default; THIS is the gate. It is passed explicitly below so
+      # that a change to conformance's constant — a repository this job does not own and does not
+      # gate — cannot loosen the estate's budget without a diff in micro-org, and it is enforced by
+      # the step in BOTH directions: the count may go DOWN and be re-recorded here, and it may never
+      # go up. A ratchet that is only printed is a comment, and a ratchet that only checks one
+      # direction never tightens.
+      BODY_SCAN_BLIND_BASELINE: 37
     steps:
       # ────────────────────────────────────────────────────────────────────────────────────────────
       # The estate, derived and cloned. THE LIST IS NOT WRITTEN DOWN — see the header.
@@ -699,6 +760,212 @@ jobs:
             | tee "${RUNNER_TEMP}/topics.txt"
           exit "${PIPESTATUS[0]}"
 
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      # INVARIANT 4 — NO ROUTE IN THE ESTATE CAN RETURN PRIVATE KEY MATERIAL.
+      #
+      # `docs/ecosystem/17-definition-of-done.md` §5 item 4 requires that no route in any service can
+      # return private key material, "asserted by a response-body scan across the entire route
+      # surface, NOT BY INSPECTION". It is the last open item of the P5 migration exit gate, and it
+      # was open because exactly one service of twenty-four asserted it — `custody/src/bodyscan.test.ts`
+      # — and a claim about the estate's route surface cannot be made from one repository. The only
+      # estate-wide key check that existed before this is `secret-hygiene.yml:73-83`, which greps
+      # repository FILES for PEM blocks; a grep over files cannot see what a running route returns and
+      # the two do not overlap at all.
+      #
+      # The checker is micro-conformance's `body-scan` (`conformance/src/bodyscan.ts`) — a
+      # TypeScript-compiler-API sweep of 498 routes over 29 servers in about two seconds, in four
+      # passes: `name` (a field called what key material is called), `provenance` (a value that came
+      # out of the vault under any name), `shape` (a literal that IS a key — a PEM block, an `xprv`, a
+      # WIF) and `row` (a whole table row from a table with a secret column reaching a body). Its
+      # vocabulary is sourced to custody's own statement of the boundary
+      # (`custody/src/exports.ts:440-453`); session tokens, password hashes, public keys and
+      # salt/iv/nonce are deliberately NOT in it, because a vocabulary containing them would fire on
+      # nearly every authenticating route in the estate on its first run and be switched off inside a
+      # week.
+      #
+      # WHERE THIS SITS AND WHY NOT WHERE ITS AUTHOR ASKED. README §7 asks for both steps immediately
+      # after `Install the checker`. They are here instead, after invariant 3, and the reason is a
+      # property of GitHub Actions rather than a preference: `actions/checkout@v4 (path: self)` and
+      # `Say which copy of the checkers is about to run` sit between `Install the checker` and the
+      # first canary, and NEITHER carries `always()` — a bare `if:` is implicitly `success() && …`. An
+      # `always()` step inserted above them would, on its own failure, SKIP the self-checkout, leave
+      # `TOOLS` unset, and take invariants 2 and 3 down with it under `set -u`. That is precisely the
+      # cross-contamination `A FAILURE IN ONE DOES NOT STOP THE OTHERS` forbids. Here, nothing above
+      # is affected by anything below, the checker has long since been installed, and the numbering
+      # reads in order.
+      #
+      # WHAT IT CANNOT SEE is in the header, and is worth reading before quoting the green: a fourth
+      # route spelling, aliasing and mutation (`out.key = secret; body: out`, the likeliest real
+      # bypass), headers not written as literals, runtime provenance, and `main` only. So is the
+      # reason `custody/src/bodyscan.test.ts` STAYS — it proves a different thing, and neither check
+      # is the other's evidence.
+      #
+      # NOTE ON RE-PROVING ITSELF: the other three checkers are files in this repository and are in
+      # the `paths:` filter at the top, so a change to one re-runs this job. This checker is in
+      # micro-conformance, which this workflow cannot watch. That is what `workflow_call` at the top
+      # is for, and micro-conformance is its right first caller — until it calls, a change to
+      # `bodyscan.ts` is graded by the next schedule rather than by its own pull request.
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      #
+      # THE CANARY IS A SUBCOMMAND, NOT THIRTY LINES OF BASH LIKE THE THREE ABOVE, AND THAT IS ITS
+      # AUTHOR'S ARGUMENT RATHER THAN AN OVERSIGHT: it asserts a property of THE CHECKER, so it has to
+      # change when the checker changes, and a copy of it living in this repository — owned by another
+      # agent, reviewed on another day — would not. `pnpm test` in conformance runs the analyser's own
+      # suite and this command re-proves it against the real estate; both move together, and micro-org
+      # keeps the one line it can actually maintain.
+      #
+      # It plants a route returning a private key into the micro-wallet checkout — wallet holds no key
+      # material, has no vault and has never had a body scan of its own, so it is the service where a
+      # leaking route would be least likely to be noticed by anything else — asserts the sweep goes red
+      # AND NAMES THE INJECTED FILE, ROUTE AND FIELD, removes it, and asserts the estate is green again,
+      # because a red that survives the cleanup was never the canary's red. It has been proven to fail
+      # in both directions: with the forbidden string removed from the vocabulary it reports "stayed
+      # GREEN — it is measuring nothing", and with helper-call extraction broken it reports "went red
+      # but never named the injected FILE".
+      #
+      # THE THREE THINGS THIS STEP ADDS ON TOP, WHICH ARE MICRO-ORG'S JOB AND NOT THE CHECKER'S:
+      #   * it refuses to be SKIPPED — a missing micro-wallet checkout fails here rather than quietly
+      #     not planting anything;
+      #   * it grades the subcommand's OUTPUT, not only its exit code, for the same reason the
+      #     subcommand grades the sweep's output: a stub that exits 0 is the one failure an exit-code
+      #     check cannot see, and it is the shape this estate keeps rediscovering;
+      #   * it sweeps for a surviving injection and DELETES it before failing, so that a canary killed
+      #     mid-flight cannot hand the verdict step below a tree this job broke and have it read as a
+      #     leak in micro-wallet.
+      - name: The canary — the body scan can still go red
+        if: always()
+        working-directory: estate/conformance
+        run: |
+          set -uo pipefail
+          rm -f "${RUNNER_TEMP}/body-canary.ok"
+          if [ ! -d "${ESTATE}/wallet/src" ]; then
+            echo "::error::micro-wallet has no src/ in this checkout, so the body-scan canary cannot be planted"
+            echo "A canary that cannot be planted must FAIL, never be skipped — a skipped canary is a green"
+            echo "verdict below with nothing standing behind it."
+            exit 1
+          fi
+
+          set +e
+          node --import tsx src/cli.ts body-scan-canary --estate .. \
+            --max-blind-routes "$BODY_SCAN_BLIND_BASELINE" 2>&1 | tee "${RUNNER_TEMP}/body-canary.txt"
+          code=${PIPESTATUS[0]}
+          set -e
+
+          # Before anything is graded: did the injection survive? The subcommand removes it on every
+          # path it controls, and none of those paths survive a SIGKILL or a step timeout.
+          stray=$(find "$ESTATE" -name '__bodyscan_canary.ts' 2>/dev/null || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the injected route survived the canary, so the verdict below would judge a tree this job broke"
+            printf '%s\n' "$stray"
+            find "$ESTATE" -name '__bodyscan_canary.ts' -delete 2>/dev/null || true
+            echo "It has been removed so the verdict step still measures the estate, and this step is red"
+            echo "because a canary that cannot clean up after itself has not been proven to have run."
+            exit 1
+          fi
+
+          if [ "$code" -ne 0 ]; then
+            echo "::error::the body scan is NOT proven able to go red — the verdict below is worth nothing"
+            echo "Read the grade above: 'stayed GREEN' means the vocabulary or a pass has stopped matching;"
+            echo "'never named the injected FILE' means it went red for some other reason, which is the same"
+            echo "thing as not measuring. Fix the checker in micro-conformance — never this step."
+            exit 1
+          fi
+
+          # Exit 0 is not the grade. A stub, a no-op subcommand and a checker whose canary quietly
+          # stopped asserting all exit 0, and every one of them would hand the step below a green it
+          # has not earned. So the two sentences the subcommand prints only when it really graded the
+          # injection are required to be there.
+          missed=0
+          grep -q 'named the injected file, route and field' "${RUNNER_TEMP}/body-canary.txt" \
+            || { echo "::error::the canary exited 0 without ever saying it graded the injection"; missed=1; }
+          grep -q 'green again once the injection was removed' "${RUNNER_TEMP}/body-canary.txt" \
+            || { echo "::error::the canary exited 0 without proving the estate is green once the injection is gone"; missed=1; }
+          if [ "$missed" -ne 0 ]; then
+            echo "A canary whose own output does not say what it proved has stopped proving it."
+            exit 1
+          fi
+
+          # The verdict step reads this file. It is a file rather than GITHUB_ENV because its absence
+          # must mean 'not vouched for', and a step that dies before writing it leaves it absent.
+          : > "${RUNNER_TEMP}/body-canary.ok"
+          echo "ok: the checker plants a leaking route, names the file, route and field, and the estate is green once it is gone"
+
+      # THE VERDICT. `always()` like the other three: "does the machinery work" and "does the estate
+      # leak" are different questions and a run must answer both, so the canary failing does not stop
+      # this from running or from printing its whole report.
+      #
+      # IT DOES, HOWEVER, STOP THIS FROM PASSING — the one place this job's four checks differ. See
+      # the header: the other three are read for their red, and this one will be read for its green,
+      # by somebody closing a migration exit gate on it. A green from a checker that was just proven
+      # to be measuring nothing is the single most expensive output this job could produce. So the
+      # report is printed in full and the step is red. Report both; trust neither.
+      - name: No route in the estate can return private key material
+        if: always()
+        working-directory: estate/conformance
+        run: |
+          set -uo pipefail
+          stray=$(find "$ESTATE" -name '__bodyscan_canary.ts' 2>/dev/null || true)
+          if [ -n "$stray" ]; then
+            echo "::error::a canary injection is still on disk, so this scan would report a leak the step above wrote"
+            printf '%s\n' "$stray"
+            exit 1
+          fi
+
+          set +e
+          node --import tsx src/cli.ts body-scan --estate .. \
+            --max-blind-routes "$BODY_SCAN_BLIND_BASELINE" 2>&1 | tee "${RUNNER_TEMP}/bodyscan.txt"
+          code=${PIPESTATUS[0]}
+          set -e
+
+          # ── THE RATCHET, ENFORCED HERE RATHER THAN READ IN THE LOG ──────────────────────────────
+          # The checker exits non-zero when the count exceeds the budget, and that is only half of a
+          # ratchet: it lets the number sit at 37 for ever, and it lets an improvement to 30 go
+          # unbanked so that the drift back to 37 is invisible. So the number is parsed out of the
+          # report and required to EQUAL the recorded baseline. Down is the only permitted movement,
+          # and taking it means editing BODY_SCAN_BLIND_BASELINE above — one reviewable line in the
+          # repository that owns the estate's invariants.
+          gate=$(grep -m1 'THE GATE IS ON THIS NUMBER' "${RUNNER_TEMP}/bodyscan.txt" || true)
+          if [ -z "$gate" ]; then
+            echo "::error::the scan never printed its blind-route line, so this job did not enforce the ratchet"
+            echo "The report's format has changed. A ratchet read out of prose that moved is a ratchet on"
+            echo "nothing, and it fails LOUDLY here rather than passing silently — fix the parse against"
+            echo "formatBodyScan() in micro-conformance, never delete the check."
+            exit 1
+          fi
+          # The first number on that line is the blind-route count: "… NUMBER — 37 of the 113 routes …".
+          observed=$(printf '%s' "$gate" | tr -cs '0-9' ' ' | awk '{print $1}')
+          if ! printf '%s' "$observed" | grep -qE '^[0-9]+$'; then
+            echo "::error::could not read a blind-route count out of: ${gate}"
+            exit 1
+          fi
+
+          if [ "$observed" -gt "$BODY_SCAN_BLIND_BASELINE" ]; then
+            echo "::error::${observed} routes in a key-holding service have a response this scan cannot fully"
+            echo "account for, and the ratchet is ${BODY_SCAN_BLIND_BASELINE}. Every one of them is printed above by path:line, in a"
+            echo "service that has a private key to lose. OPEN THE VALUE. Raising BODY_SCAN_BLIND_BASELINE is"
+            echo "not a fix — it is a decision to stop measuring the part of the estate that matters most."
+            code=1
+          elif [ "$observed" -lt "$BODY_SCAN_BLIND_BASELINE" ]; then
+            echo "::error::the blind-route count has FALLEN to ${observed} and the ratchet still records ${BODY_SCAN_BLIND_BASELINE}"
+            echo "Bank it: set BODY_SCAN_BLIND_BASELINE to ${observed} in this workflow's env: block and commit."
+            echo "This is red on an IMPROVEMENT on purpose. A ratchet that is not tightened when it can be is"
+            echo "a comment, and the drift back up to ${BODY_SCAN_BLIND_BASELINE} would then be invisible to everybody."
+            code=1
+          else
+            echo "ratchet: ${observed} blind routes, exactly the ${BODY_SCAN_BLIND_BASELINE} recorded — it may go DOWN and be re-recorded, never up"
+          fi
+
+          # ── AND WHETHER ANY OF THE ABOVE IS WORTH READING ───────────────────────────────────────
+          if [ ! -f "${RUNNER_TEMP}/body-canary.ok" ]; then
+            echo "::error::the canary did not vouch for this checker, so everything above is REPORTED AND NOT TRUSTED"
+            echo "It is printed in full deliberately — a run must answer 'does the estate leak' and 'does the"
+            echo "checker still work' separately, and suppressing this report would answer neither. But a green"
+            echo "from a checker proven to be measuring nothing is not a pass, and the P5 exit gate must not be"
+            echo "closed on one. Fix the canary first; this verdict means nothing until it is green."
+            code=1
+          fi
+          exit "$code"
+
       # ────────────────────────────────────────────────────────────────────────────────────────────
       # A red with an owner. See "WHERE A FAILURE LANDS" in the header: without this, the schedule's
       # entire output is a run record that ages out and an email nobody is on.
@@ -751,6 +1018,22 @@ jobs:
             echo '```'
             tail -c 30000 "$RUNNER_TEMP/topics.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
             echo '```'
+            echo
+            echo "### Private key material in response bodies"
+            echo
+            echo "The P5 exit gate item (\`17-definition-of-done.md\` §5 item 4). A green here is only"
+            echo "worth reading beside a green canary: the canary's report is included because a scan"
+            echo "proven to be measuring nothing prints the same clean report as a clean estate."
+            echo "It does **not** replace \`custody/src/bodyscan.test.ts\`, which proves a different"
+            echo "thing dynamically against real key material. Neither is the other's evidence."
+            echo
+            echo '```'
+            tail -c 4000 "$RUNNER_TEMP/body-canary.txt" 2>/dev/null || echo "(no canary report — the step did not get that far, read the run)"
+            echo '```'
+            echo
+            echo '```'
+            tail -c 30000 "$RUNNER_TEMP/bodyscan.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
+            echo '```'
           } > "$RUNNER_TEMP/issue.md"
 
           gh label create estate-invariant --repo "$REPO" --color B60205 \
@@ -786,12 +1069,19 @@ jobs:
             || echo "::warning::could not close issue #${open}"
 
       # ────────────────────────────────────────────────────────────────────────────────────────────
-      # WHAT A FOURTH INVARIANT WOULD COST, WRITTEN DOWN WHILE IT IS FRESH.
+      # WHAT A FIFTH INVARIANT WOULD COST, WRITTEN DOWN WHILE IT IS FRESH.
       #
-      # Three steps, one checkout, one canary each. Adding a fourth is: a checker in `tools/`, a
-      # canary that injects a violation and requires the sweep to NAME it, a verdict step with
-      # `if: always()`, its report in the issue body, and its file in the `paths:` filter at the top
-      # so a change to it re-proves itself. Nothing else in this file needs to change.
+      # Four steps, one checkout, one canary each. Adding a fifth is: a checker (in `tools/`, or in
+      # micro-conformance like invariant 4's), a canary that injects a violation and requires the
+      # sweep to NAME it, a verdict step with `if: always()`, its report in the issue body, and — if
+      # the checker lives in this repository — its file in the `paths:` filter at the top so a change
+      # to it re-proves itself. Nothing else in this file needs to change.
+      #
+      # THE ONE THING INVARIANT 4 CHANGED ABOUT THAT RECIPE, and it is worth copying: its canary is a
+      # SUBCOMMAND of its own checker rather than bash here. That is the right default whenever the
+      # checker lives in another repository, because a canary asserts a property of the checker and
+      # has to move when the checker moves. Bash here is right only for a checker that also lives
+      # here, which is the other three.
       #
       # The one found while writing the third, and deliberately NOT added here, so that it is not
       # lost: several services stamp the envelope's wire `version` as an INTEGER (`values (…, 1, …)`,

@@ -1213,7 +1213,22 @@ jobs:
             code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/livez" || true)
             [ "$code" = "200" ] && { echo "ok: /livez answered after ${attempt}s"; exit 0; }
             # A container that has already exited will never answer; stop waiting and show why.
-            docker ps --format '{{.Names}}' | grep -qx "$name" || break
+            #
+            # ASKED OF DOCKER RATHER THAN GREPPED OUT OF A PIPE, and that is not a style preference.
+            # This was `docker ps --format '{{.Names}}' | grep -qx "$name"`, and under the
+            # `set -uo pipefail` above that is a SIGPIPE race: `grep -q` exits the instant it matches
+            # — documented behaviour, not an accident — the writer upstream gets EPIPE, and pipefail
+            # turns the whole pipeline non-zero. Here that reads as "the container is gone", breaks
+            # the wait loop, and reports `the image never answered /livez` about a container that was
+            # answering. The same shape was seen failing in micro-devportal-web and then passing on
+            # re-run with nothing changed. A gate that is intermittently red for NO reason teaches
+            # people to press re-run instead of reading it, and this one is in the reusable workflow
+            # every service in the estate calls, so it would look like flaky infrastructure rather
+            # than one fixable line.
+            #
+            # `--filter name=` takes a regex, so `^…$` is exactly `grep -qx`, and `docker ps` already
+            # lists only running containers. No pipe, so nothing can close one early.
+            [ -n "$(docker ps --quiet --filter "name=^${name}$")" ] || break
             sleep 1
           done
           echo "::error::the image never answered /livez"
