@@ -290,7 +290,7 @@ jobs:
       # the step in BOTH directions: the count may go DOWN and be re-recorded here, and it may never
       # go up. A ratchet that is only printed is a comment, and a ratchet that only checks one
       # direction never tightens.
-      BODY_SCAN_BLIND_BASELINE: 38
+      BODY_SCAN_BLIND_BASELINE: 37
     steps:
       # ────────────────────────────────────────────────────────────────────────────────────────────
       # The estate, derived and cloned. THE LIST IS NOT WRITTEN DOWN — see the header.
