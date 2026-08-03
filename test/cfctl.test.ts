@@ -140,6 +140,74 @@ test('every deployable gets a distinct container port, and an unregistered name 
   assert.ok(!new Set(ports).has(portFor('a-repository-that-does-not-exist-yet')));
 });
 
+/**
+ * THE DERIVED ORDER IS PINNED, because distinctness was never the property that broke.
+ *
+ * The test above asserts no two repositories share a port. That was already true before the sweep
+ * and after it, and it is not what went wrong: the sweep inserted NINE deployables into the MIDDLE
+ * of the list — four services ahead of the frontend block, five frontends ahead of the ops block —
+ * and every port after `analytics` MOVED. The set stayed distinct the whole time, so this file
+ * stayed green while sixteen numbers another repository had already written down went stale.
+ *
+ * What moved, and it is pinned in micro-deploy's compose file rather than anywhere here:
+ *
+ *   * all eleven original frontends slid by four — `hub-web` 4122 -> 4126, `status-web` 4132 -> 4136
+ *   * all three ops services slid by nine — `lantern` 4133 -> 4142, `faucet` 4135 -> 4144
+ *   * `tessera` derives 4125, and `deploy/compose/docker-compose.estate.yml:1423` pins 4140
+ *
+ * `docker-compose.estate.yml:1545-1553` says its host ports are "derived, like every other port
+ * here", off `4100 + index in deployableRepos()`, and :1568 says `scripts/web-check.py` "fails when
+ * this file and the registry disagree, so the drift cannot be silent". THAT SCRIPT DOES NOT EXIST.
+ * micro-deploy/scripts holds nine files and none of them is it, so the sole claimed guard on this
+ * coupling is a comment naming a checker nobody wrote — and the drift was, in fact, silent.
+ *
+ * The fix belongs in the repository that OWNS the derivation, which is this one. APPENDING STAYS
+ * FREE: a new row at the end lengthens the list and moves nothing, which is the whole reason rows
+ * are appended rather than inserted. What is no longer possible is moving a repository some other
+ * repository has already pinned a number for, without a red that names it and both ports.
+ */
+const DERIVED_PORT_ORDER: readonly string[] = [
+  // 4100-4121 — the 22 domain services of 03 §1.1. These never moved; the insertions were after.
+  'identity', 'policy', 'ledger', 'wallet', 'settlement', 'pricing', 'billing', 'custody',
+  'indexer', 'activity', 'notify', 'studio', 'mint', 'market', 'trade', 'worlds', 'nda',
+  'community', 'devplatform', 'hub-api', 'admin-api', 'analytics',
+  // 4122-4125 — the four services 03 §1 predates. INSERTED HERE by the sweep, which is what
+  // displaced everything below. `tessera` is 4125, against the 4140 micro-deploy chose by hand.
+  'emberkin', 'foresight', 'aetherholm', 'tessera',
+  // 4126-4136 — the eleven frontends of 03 §1.2, each four higher than the number compose pins.
+  'hub-web', 'site', 'admin-web', 'mint-web', 'trade-web', 'worlds-web', 'explorer-web',
+  'network-site', 'market-web', 'devportal-web', 'status-web',
+  // 4137-4141 — the five further frontends. `tessera-web` lands on 4141, which is the number
+  // micro-deploy chose for it by hand; that agreement is a coincidence of arithmetic, not a fix.
+  'emberkin-web', 'foresight-web', 'foresight-admin-web', 'aetherholm-web', 'tessera-web',
+  // 4142-4144 — the three operations services of 03 §1.3, nine higher than compose pins them.
+  'lantern', 'beacon', 'faucet',
+];
+
+test('no registry change moves a port that already exists; appending is the only free edit', () => {
+  const actual = deployableRepos().map((repo) => repo.name);
+
+  // Reported one row at a time, and by NAME rather than as a diff of two long arrays: the failure
+  // this guards is "somebody inserted a row", and the useful output is which repository now answers
+  // to a different number, not that two lists are unequal somewhere.
+  for (const [index, expected] of DERIVED_PORT_ORDER.entries()) {
+    assert.equal(
+      actual[index],
+      expected,
+      `port ${4100 + index} belonged to '${expected}' and now belongs to '${actual[index] ?? 'nothing'}' — ` +
+        `a row was inserted or removed ahead of it, so every host port from here down has moved. ` +
+        `Append instead, or recompute micro-deploy's compose file and update this list in the same commit.`,
+    );
+  }
+
+  // Growth is allowed, and only at the end. A shorter list means a row was deleted, which moves
+  // ports just as surely as an insertion does.
+  assert.ok(
+    actual.length >= DERIVED_PORT_ORDER.length,
+    `${DERIVED_PORT_ORDER.length - actual.length} deployable row(s) were removed; every port after the gap has moved`,
+  );
+});
+
 test('a directory beside the estate that no row names is reported, not skipped', () => {
   // The crucible bug. Given a fixture rather than the real tree, because in this repository's own
   // CI the only sibling is this repository — and a check that passes vacuously where it runs is
