@@ -101,7 +101,41 @@
     "",
     "Both were verified against the two repositories' source before deletion rather than against the",
     "exit code, because 'closed' and 'changed shape' produce the same red and only one of them means",
-    "the record should go."
+    "the record should go.",
+    "",
+    "A third went on 2026-08-03, and it is the first `unfixed` record to be deleted by the",
+    "repository that owned it rather than by the estate moving underneath it:",
+    "",
+    "  * `unreachable:tessera.venue.booked` was UNFINISHED WORK, and its evidence named the three",
+    "    things that had to exist before the emitter could go live. All three now do, in",
+    "    micro-tessera, in migration 14 and economy.ts:",
+    "",
+    "      1. A RATE. `parcels.venue_rate_wei` — per hour, set by the OWNER, positive and whole",
+    "         Sparks by CHECK. `tessera_a_venue_posts_a_rate` refuses `is_venue` with no rate and",
+    "         the venue trigger refuses a booking priced at anything but `venue_rate_wei * hours`,",
+    "         so 'a zero-price hold on somebody else's calendar is legal today' is now false: the",
+    "         old `tessera_booking_price_not_negative check (price_wei >= 0)` is DROPPED and",
+    "         replaced by `tessera_booking_price_is_positive check (price_wei > 0)`.",
+    "      2. THE OTHER TWO THIRDS OF THE LIFECYCLE. `settleBooking` and `cancelBooking`",
+    "         (economy.ts, both through one `closeBooking`) release the hold through micro-ledger's",
+    "         `POST /reservations/:id/release`, and settling then pays the owner. The evidence's",
+    "         'there is no `update bookings` in tessera/src at all' no longer holds, and the money",
+    "         cannot be stranded by a future writer either:",
+    "         `bookings_terminal_frees_the_money check (status = 'open' or released_entry_id is not",
+    "         null)` means a terminal booking that did not release has no representation.",
+    "      3. `ledger:reserve`. tessera/src/ledgerclient.ts now exports",
+    "         `LEDGER_SCOPES = ['ledger:post', 'ledger:reserve']`, which is the grant opening itself",
+    "         from that repository's own source exactly as the evidence predicted. What is left is",
+    "         micro-deploy's: `derive-grants.mjs --check` now FAILS with \"'tessera/src/",
+    "         ledgerclient.ts' now declares its own scopes ... delete this entry\", and the compose",
+    "         file's `IDENTITY_SERVICE_TOKEN_GRANTS` needs re-rendering.",
+    "",
+    "    And the emitter is reachable: `bookVenue` is called from tessera/src/server.ts, the route",
+    "    `POST /v1/parcels/:id/bookings`, which is what direction 5 was measuring. Verified against",
+    "    source and against a real Postgres — economy.test.ts opens a booking, drives it to each",
+    "    terminal state and asserts the `reserved` balance is the price while open and zero after,",
+    "    and eight deliberate mutations of the constraints and the release were each confirmed to",
+    "    turn that suite red from a stated green of 150 tests, 146 passing, 4 skipped."
   ],
   "gaps": {
     "unreachable:tessera.object.anchored": {
@@ -110,12 +144,6 @@
       "recordedAt": "2026-08-03",
       "evidence": "`recordAnchor` (tessera/src/kiln.ts:423) emits OBJECT_ANCHORED at kiln.ts:437 — declared tessera/src/topics.ts:32 — and nothing in tessera/src calls it. IT IS A MISSING CONTRACT, NOT MISSING WIRING, and the emitter's own docstring used to say the opposite: it claimed v1 anchors go 'through the existing mint deploy path', and there is no such path. mint/src/catalogue.ts:28 is the closed union `'fixed' | 'mintable' | 'foundry'`, each variant carrying committed bytecode beside it (:43, :51, :60), with no route that deploys arbitrary bytecode; hearth/contracts/src/ holds HearthV2Router02, Factory, Pair and ERC20, WEMBER and Multicall3, and `grep -ril authorship hearth/` matches NOTHING — the Registry of Authorship Solidity has never been written. So this is not the emitSessionRevoked shape the verdict names it after: that emitter was waiting on a call somebody could have written, and this one is waiting on a chain that does not exist. Deleting it would strand a consumer that is already finished — notify/src/catalogue.ts:1137 is a complete, unblocked rule reading `authorSubject` explicitly, with a template at notify/src/templates.ts:397 and tests at notify/src/catalogue.test.ts:846, and contracts/packages/events/src/audit.ts:323 registers the topic `audited` with `subjectKind: 'user'` — and would take edits in two repositories micro-tessera does not own. The half of this that WAS a defect, no caller AND no test, so the payload's agreement with that waiting consumer was never checked, is closed: tessera/src/kiln.test.ts:479 exercises it against the four fields notify reads. Unwired is a fact about the chain; unverified was a defect, and it is repaired.",
       "until": "TWO GREPS, both of which fail today. (1) `hearth/contracts/src/` holds a Registry of Authorship contract — right now `grep -ril authorship hearth/` matches nothing, and the only .sol in the repository are the HearthV2 AMM, WEMBER and Multicall3. (2) `mint` can deploy something that is not one of three ERC-20s — right now `Variant` at mint/src/catalogue.ts:28 is the closed union `'fixed' | 'mintable' | 'foundry'` and every entry of VARIANTS names committed token bytecode, so a registry deploy cannot be expressed at all. When both hold, tessera writes the caller at the seam 04-domain-model §9.3 names — when a creator first LISTS an object, not when they fire it — and this record fails on the next run as one that no longer describes the estate. That failure is the deletion working, not a regression: settlement.outbound.failed and market.offer.made both left this file that way."
-    },
-    "unreachable:tessera.venue.booked": {
-      "owner": "micro-tessera",
-      "status": "unfixed",
-      "recordedAt": "2026-08-03",
-      "evidence": "`bookVenue` (tessera/src/economy.ts:516) emits VENUE_BOOKED at economy.ts:549 — declared tessera/src/topics.ts:34 — and outside tests nothing in tessera/src calls it. IT IS UNFINISHED WORK, NOT A DECISION, so it takes no `until`: every dependency outside this repository is already there, and there is nobody to wait for. That is what separates it from the anchor above — micro-ledger serves POST /reservations (ledger/src/server.ts:449) and POST /reservations/:id/release (:488) today, and notify/src/catalogue.ts:1266 is a finished, unblocked `high` rule resolving its recipient through the `ownerSubject` this payload already carries. Nor is it `transferParcel`'s shape: that was a duplicate implementation, consolidated into `moveParcel` (tessera/src/world.ts:711 delegating to :770) so the emitter went live, and no other service in this estate books a venue, so there is nothing to consolidate. WHAT IS MISSING IS THE REST OF THE FEATURE, and wiring the emitter first would be wrong in three separate ways. (1) NO RATE EXISTS ANYWHERE. `parcels.is_venue` is a boolean (tessera/src/migrations.ts:233) with no rate column beside it or in any other table, so `BookInput.priceWei` (economy.ts:501) is an unsourced input and its only constraint is `tessera_booking_price_not_negative check (price_wei >= 0)` (migrations.ts:910) — a zero-price hold on somebody else's calendar is legal today. Who prices a slot is undecided, and a route cannot be written before it is decided. (2) TWO THIRDS OF THE LIFECYCLE HAVE NO CODE. `bookings_status_known` admits `open | settled | cancelled` (migrations.ts:908) and the insert at economy.ts:541 is the ONLY statement against `bookings` in non-test source — there is no `update bookings` in tessera/src at all — so a booking could be opened and never released, STRANDING THE PLAYER'S EMBER IN `reserved`, the account `reservePostings` (tessera/src/ledgerclient.ts:395) posts it to, permanently and with no path out. Money locked with no release is why this emitter must not go live before the other two thirds. (3) `ledger:reserve` (ledger/src/server.ts:80) IS NOT GRANTED. deploy/compose/estate/grant-gaps.json gives `tessera/src/ledgerclient.ts` `ledger:post` alone, derived from 'the single call site: POST /entries ... It reaches no other ledger route'. Real, but explicitly NOT EXTERNAL: the grant is computed from this repository's own call sites, so it opens itself the moment the call site exists. All three are micro-tessera's to write and it needs nobody's permission for any of them, which is exactly why this is `unfixed`. The specification is recorded in full at tessera/README.md:128. The half that WOULD have been a defect is already closed: economy.test.ts:447 exercises the emit against a real database and asserts the outbox row (economy.test.ts:480), and contracts.test.ts:72 pins `keyedBy` to `parcel_id`."
     }
   }
 }
