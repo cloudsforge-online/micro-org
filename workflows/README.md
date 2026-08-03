@@ -15,8 +15,28 @@ the first time somebody edits the wrong one.
 | [`publish.yml`](../.github/workflows/publish.yml) | The dead `NPM_TOKEN`, and with it every manual release ritual in the estate |
 | [`contract-compat.yml`](../.github/workflows/contract-compat.yml) | Reviewing a contract diff by eye across repositories that cannot see each other |
 | [`secret-hygiene.yml`](../.github/workflows/secret-hygiene.yml) | Checks that were in some of the eleven copies and not others |
+| [`estate-ci.yml`](../.github/workflows/estate-ci.yml) | Nothing — it is the first job in the estate that has **every** repository checked out at once, and so the first that can see an invariant no single repository holds both halves of |
 
-A repository calls them and holds no jobs of its own:
+## `estate-ci.yml` is the odd one out, deliberately
+
+The five workflows above answer "is **this** repository right", and a repository calls them. The
+sixth answers "do these repositories agree", and **no repository calls it** — it runs on a schedule
+and on demand, in micro-org, and blocks nothing outside micro-org.
+
+That is a decision, not an oversight, and the whole argument is in the file's own header. The short
+version: an estate-wide check that can turn a service's pull request red for a defect its author did
+not cause and cannot fix is a check that gets switched off within a week, which is the failure mode
+`micro-beacon` already writes down about its own release gate (`beacon/src/estate.ts:15`). So the
+red lands in micro-org, and — because a nightly red that belongs to nobody is wallpaper — it also
+opens an issue labelled `estate-invariant`, and closes it again when the sweep is green.
+
+Its first check is the ledger account-type sweep in `micro-conformance`: two services naming one
+`(subject, asset, purpose)` account key with two different `type`s means whichever posts second in
+production has **every** entry refused, and no per-service suite can see it because each tests
+against its own fake ledger. The scope-registry totality check and the topic-registry reconciliation
+belong in the same job for the same reason, and are a step each rather than a new mechanism.
+
+A repository calls the other five and holds no jobs of its own:
 
 ```yaml
 jobs:

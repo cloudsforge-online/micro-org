@@ -420,3 +420,72 @@ test('the workflow step runs the script against the checked-out contracts and th
 })
 
 test.after(() => rmSync(AUDIT_DIR, { recursive: true, force: true }))
+
+/* --------------------- the estate-wide sweep ------------------------ */
+
+/**
+ * `estate-ci.yml` is the only job in the estate with every repository checked out at once, which is
+ * the only vantage point from which the ledger account-type defect is visible at all. Everything
+ * that makes it trustworthy is a property somebody could delete in a hurry and nothing would go red
+ * — a green sweep of an empty directory looks exactly like a green sweep of an estate that agrees —
+ * so the properties are asserted here rather than trusted.
+ */
+describe('estate-ci sweeps the whole estate, or says so', () => {
+  const yaml = readFileSync(DIR + 'estate-ci.yml', 'utf8')
+
+  it('derives the repository list instead of writing one down', () => {
+    // tools/registry.ts lists 46 repositories and does NOT contain micro-emberkin, which is one of
+    // the three repositories the account defect was actually found in. A hand-maintained list would
+    // have made this job blind to the defect it exists to catch, and green while doing it.
+    assert.match(yaml, /gh api --paginate "orgs\/\$\{OWNER\}\/repos/, 'the list must come from the API')
+    assert.doesNotMatch(
+      yaml,
+      /^\s+(micro-ledger|micro-worlds|micro-settlement)\b/m,
+      'no repository may be named as part of a checkout list',
+    )
+  })
+
+  it('strips the micro- prefix, or the sweep reads its own answer key', () => {
+    // The sweep's only exclusion is DEFAULT_EXCLUDED = ['conformance'], matched on the directory
+    // name. Checked out as `micro-conformance/`, CANONICAL_ACCOUNTS — the chart itself — enters the
+    // sweep as twenty claims by a service that has never posted an entry, manufacturing
+    // disagreements out of the table that decides them.
+    assert.match(yaml, /\$\{name#micro-\}/)
+  })
+
+  it('a clone that failed is fatal, never skipped', () => {
+    // The sweep cannot tell "this repository holds no account literals" from "this repository was
+    // not there", and the second silently shrinks the denominator of every green it ever prints.
+    assert.match(yaml, /a repository in the estate could not be cloned/)
+    assert.match(yaml, /MIN_REPOS/, 'the count must be asserted, not assumed')
+  })
+
+  it('carries a canary that is graded on more than an exit code', () => {
+    // A broken checkout, a missing subcommand and an unresolvable import all exit non-zero too. A
+    // canary that accepts any red accepts every way this job can quietly stop measuring the estate.
+    assert.match(yaml, /- name: The canary — this job can still go red/)
+    assert.match(yaml, /the sweep stayed GREEN with a known-bad account type injected/)
+    assert.match(yaml, /grep -q '__estate_ci_canary\.ts'/, 'the red must be attributed to the injection')
+    assert.match(yaml, /the canary file was not written/, 'this estate has graded an unchanged file before')
+    assert.match(yaml, /the canary survived/, 'and the injection must be proven gone before the real sweep')
+  })
+
+  it('the verdict is still printed when the canary is what broke', () => {
+    const verdict = yaml.slice(yaml.indexOf('- name: The estate agrees on every ledger account type'))
+    assert.match(verdict.slice(0, 200), /if: always\(\)/)
+  })
+
+  it('a scheduled red gets an owner rather than a run record that ages out', () => {
+    assert.match(yaml, /gh issue create --repo "\$REPO" --label estate-invariant/)
+    assert.match(yaml, /gh issue close "\$open"/, 'and it must close again, or the label becomes noise')
+  })
+})
+
+test('no per-repository workflow calls the estate sweep', () => {
+  // Rejected mechanism 1, asserted rather than remembered: a service that called this would clone
+  // fifty-five repositories per push and go red for defects its author did not cause and cannot fix,
+  // which is how an estate-wide gate gets switched off within a week.
+  for (const file of ['service-ci.yml', 'web-ci.yml']) {
+    assert.doesNotMatch(readFileSync(DIR + file, 'utf8'), /estate-ci\.yml/, `${file} must not call the sweep`)
+  }
+})

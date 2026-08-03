@@ -1,0 +1,390 @@
+name: estate-ci
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE INVARIANTS THAT ARE TRUE OF THE ESTATE AND OF NO SINGLE REPOSITORY.
+#
+# service-ci.yml and web-ci.yml answer "is THIS repository right". Some of the estate's most
+# expensive defects are not properties of a repository at all — they are properties of the
+# relationship between two of them, and no per-repository job can see one, however good it is.
+#
+# The first of them, and the reason this file exists:
+#
+#   `micro-ledger` keys an account on `(subject, asset_code, purpose)` and NOT on its type, so
+#   `ensureAccount` throws `AccountConflictError` when a caller names an existing account with a
+#   different `type` (ledger/src/accounts.ts:125). Every service picks that type independently, in
+#   its own source. When two disagree, whichever posts SECOND in production has EVERY entry refused
+#   — not one entry, every entry, for as long as the disagreement stands. It is invisible to every
+#   suite in the estate because each service tests against its own fake ledger, so nothing in CI has
+#   ever put two real services against one real chart of accounts.
+#
+#   Three instances were found — micro-worlds, micro-emberkin and micro-settlement all debiting
+#   `(platform, …, fees)` as `expense` against `revenue` in six other services — and all three were
+#   found by a human reading a second repository for an unrelated reason. "Found incidentally, three
+#   times" is not a search.
+#
+# `micro-conformance` holds the search (`src/ledgeraccounts.ts`): a TypeScript-compiler-API sweep,
+# not a regex, because the account literals are spelled three different ways across the estate. It
+# works and it is proven to go red. Its author recorded the limitation that made it nearly useless:
+#
+#   > No CI job anywhere has all services checked out — service-ci fetches only runtime+contracts —
+#   > so the estate half is a local gate today.
+#
+# An estate-wide invariant that runs only when somebody remembers to run it locally is not a gate.
+# This file is the job that has all services checked out.
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# THE THREE MECHANISMS THAT WERE AVAILABLE, AND WHY THIS IS THE ONE
+#
+# 1. REJECTED — a job inside service-ci.yml, so every service's CI sweeps the estate.
+#    It is the only shape that can BLOCK a merge without editing 55 repositories, and it is wrong
+#    twice over. It would clone ~55 repositories on every push to any of them — roughly fifty times
+#    the work for exactly the same answer, since the sweep's result depends on the estate and not on
+#    which repository triggered it. And it makes micro-pricing's CI fail when micro-worlds is
+#    unavailable, or when micro-worlds lands a bad account type: a red that the author of the pricing
+#    pull request cannot fix, cannot explain and did not cause. beacon says what happens next
+#    (beacon/src/estate.ts:15) — "a declared-but-skipping critical journey would refuse every release
+#    for ever", and the fix everyone reaches for is to switch the gate off. An estate-wide check that
+#    can block an unrelated author is a check with a one-week life expectancy.
+#
+# 2. REJECTED AS THE WHOLE ANSWER — a nightly schedule and nothing else.
+#    It catches drift only after it has landed, and a nightly red that belongs to nobody is a red
+#    that gets ignored; within a month it is wallpaper. The schedule is KEPT, because it is the only
+#    trigger that exists without editing other repositories, but it is not left as a bare red: see
+#    "WHERE A FAILURE LANDS" below.
+#
+# 3. NOT AVAILABLE — a job triggered by pushes to the repositories that matter.
+#    Narrower and better, and a workflow in micro-org cannot see another repository's pushes without
+#    that repository notifying it. Every service's CI already CALLS micro-org, but it calls with
+#    `estate_token`, documented and provisioned as `contents:read`; making the estate's most
+#    important gate depend on turning 55 read tokens into write tokens is a migration that fails
+#    silently in every repository that has not done it yet — the exact "check that cannot fail" class
+#    this estate keeps rediscovering. When a repository wants precision it can have it today:
+#    `workflow_call` is declared below, and micro-conformance (which owns the checker) is the right
+#    first caller, so that changing the checker re-sweeps the estate.
+#
+# So: ONE job, in the one repository that owns estate-wide invariants, on a schedule, on demand, and
+# whenever this file itself changes.
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# BLOCKS OR REPORTS
+#
+# It BLOCKS in micro-org — this job goes red, and micro-org is where an estate-wide invariant is
+# owned and fixable. It blocks NO service's merge, because it is not called from any service's CI and
+# must not be: nothing here is fixable by the author of an unrelated pull request.
+#
+# WHERE A FAILURE LANDS. A red run is a URL that expires and a notification nobody is on. So on a
+# scheduled or pushed failure this job opens — or comments on — an issue in micro-org labelled
+# `estate-invariant`, carrying the full report, and CLOSES it again when the sweep goes green. That
+# is the difference between a nightly red and a nightly red with an owner, and it is the whole answer
+# to objection 2 above.
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# A JOB THAT SILENTLY REFUSES TO RUN IS A CHECK THAT CANNOT FAIL
+#
+# The sweep refuses a partial checkout (`MIN_SERVICES = 40`, ledgeraccounts.ts:508) precisely because
+# an empty parent directory would otherwise report "0 disagreements" and pass. This job is built so
+# that the refusal is never how we find out:
+#
+#   * The repository list is DERIVED from the GitHub API, never written down here. micro-org's own
+#     tools/registry.ts lists 46 repositories and does not contain micro-emberkin — one of the three
+#     repositories the account defect was actually found in. A hand-maintained list would have made
+#     this job blind to the very defect it exists to catch, and would have reported green while doing
+#     it. The count the API returns is asserted, and a clone that fails is fatal rather than skipped.
+#   * A CANARY runs BEFORE the real sweep, on every run: a known-bad account type is injected into
+#     the checked-out estate, and the job fails unless the sweep goes red AND names the injected file.
+#     Exit-code-only grading is not enough — a broken checkout also exits non-zero, for the wrong
+#     reason. This estate has already shipped a canary that graded an unchanged file, so the
+#     injection is asserted written before and asserted deleted after.
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
+# WHAT THIS STILL CANNOT SEE
+#
+# Everything ledgeraccounts.ts's own header lists — anything not written as a TypeScript object
+# literal, types decided at runtime, the ledger's own already-written rows — plus one thing that is
+# this file's: it sees `main`. A disagreement introduced on a branch is caught when it lands, not
+# when it is proposed. That is the price of mechanism 3 being unavailable, and it is written down
+# here rather than left to be discovered.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+on:
+  # 06:17 UTC. Off the hour deliberately: the hour is where every cron in every estate piles up and
+  # where GitHub's scheduler is most likely to delay or drop a run.
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+  # A change to this file re-proves the mechanism. Both halves matter: the pull request tells the
+  # author whether the machinery still works, and the push tells the repository whether it works on
+  # main, which is the only ref the schedule will ever use.
+  push:
+    branches: [main]
+    paths: ['.github/workflows/estate-ci.yml']
+  pull_request:
+    paths: ['.github/workflows/estate-ci.yml']
+  workflow_call:
+    secrets:
+      estate_token:
+        description: >-
+          A token with `contents:read` on every `micro-*` repository, and metadata read on the
+          organisation so the repository list can be derived rather than written down. Falls back to
+          this repository's own ESTATE_READ_TOKEN when the workflow runs in micro-org.
+        required: false
+
+# One sweep at a time. Two concurrent runs would answer the same question about the same estate and
+# race each other for the issue below.
+concurrency:
+  group: estate-ci
+  cancel-in-progress: false
+
+jobs:
+  ledger-accounts:
+    name: No two services claim one ledger account with two types
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # For the issue that gives a nightly red an owner. A caller that does not grant this gets a
+      # warning and a red job, never a silently missing issue.
+      issues: write
+    env:
+      OWNER: cloudsforge-online
+      ESTATE: ${{ github.workspace }}/estate
+      # Below the 55 `micro-*` repositories that exist, far above any accidental subset — the same
+      # reasoning as MIN_SERVICES, applied one layer earlier so a token that can see only two
+      # repositories fails HERE, with a message that names the cause, rather than as "the sweep read
+      # a partial checkout".
+      MIN_REPOS: 45
+    steps:
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # The estate, derived and cloned. THE LIST IS NOT WRITTEN DOWN — see the header.
+      #
+      # Directories are named WITHOUT the `micro-` prefix, which is not cosmetic: the sweep's only
+      # exclusion is `DEFAULT_EXCLUDED = ['conformance']`, and it matches on the directory name. A
+      # checkout at `micro-conformance/` would put CANONICAL_ACCOUNTS — the chart itself, twenty
+      # `{ subject, purpose, type }` literals — into the sweep as claims by a service that has never
+      # posted a ledger entry, and manufacture disagreements out of the answer key. It also makes the
+      # layout identical to a developer's own `cloudsforge-micro/`, so the command below is the same
+      # command a human runs locally.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Clone the estate
+        env:
+          GH_TOKEN: ${{ secrets.estate_token || secrets.ESTATE_READ_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::no estate token, so this job can see two repositories and would certify the estate from them"
+            echo "Pass secrets.estate_token, or set ESTATE_READ_TOKEN on this repository."
+            exit 1
+          fi
+          mkdir -p "$ESTATE"
+
+          repos=$(gh api --paginate "orgs/${OWNER}/repos?per_page=100" \
+                    --jq '.[] | select(.archived == false) | select(.name | startswith("micro-")) | .name' || true)
+          printf '%s\n' "$repos" | sed '/^$/d' > "$RUNNER_TEMP/repos.txt"
+          listed=$(grep -c . "$RUNNER_TEMP/repos.txt" || true)
+          listed=${listed:-0}
+          echo "the organisation lists ${listed} unarchived micro-* repositories"
+          if [ "$listed" -lt "$MIN_REPOS" ]; then
+            echo "::error::only ${listed} repositories listed, expected at least ${MIN_REPOS}"
+            echo "The token cannot see the organisation. A sweep of what it CAN see would report"
+            echo "'no disagreements' and be worthless — see MIN_SERVICES in ledgeraccounts.ts."
+            exit 1
+          fi
+
+          # The token goes into git's config once, rather than into ~55 command lines and the logs
+          # that quote them.
+          git config --global "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" https://github.com/
+
+          clone_one() {
+            name="$1"
+            dir="${ESTATE}/${name#micro-}"
+            if git clone --depth 1 --single-branch --quiet "https://github.com/${OWNER}/${name}.git" "$dir" \
+                 2>"${RUNNER_TEMP}/${name}.err"; then
+              echo "ok       ${name}"
+            else
+              echo "FAILED   ${name}"
+              sed 's/^/             /' "${RUNNER_TEMP}/${name}.err"
+            fi
+          }
+          export -f clone_one
+          export ESTATE OWNER RUNNER_TEMP
+          # -P 8: the estate is ~150 MB at depth 1, most of it three asset repositories. Serial, that
+          # is minutes of a job whose real work takes seconds.
+          xargs -P 8 -I {} bash -c 'clone_one "$@"' _ {} < "$RUNNER_TEMP/repos.txt" \
+            | sort | tee "$RUNNER_TEMP/clone.log"
+
+          # A clone that failed is FATAL, never skipped. The sweep cannot tell "this repository holds
+          # no account literals" from "this repository was not there", and the second one silently
+          # subtracts from the denominator of every green result this job will ever print.
+          failures=$(grep '^FAILED' "$RUNNER_TEMP/clone.log" || true)
+          if [ -n "$failures" ]; then
+            echo "::error::a repository in the estate could not be cloned, so the sweep would be partial"
+            printf '%s\n' "$failures"
+            exit 1
+          fi
+
+          cloned=$(ls -1 "$ESTATE" | grep -c . || true)
+          cloned=${cloned:-0}
+          echo "cloned ${cloned} repositories into ${ESTATE}"
+          [ "$cloned" -ge "$MIN_REPOS" ] || { echo "::error::only ${cloned} checkouts on disk"; exit 1; }
+
+      # The checker is `micro-conformance`, which the loop above has already cloned as
+      # `estate/conformance` — the same directory the sweep then excludes from its own reading. No
+      # special case, and no second copy of the checker to drift from the first.
+      - uses: pnpm/action-setup@v4
+        with:
+          # Pinned for the same reason service-ci.yml pins it: there is no package.json in the
+          # working directory for pnpm/action-setup to read a packageManager field out of.
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: estate/conformance/pnpm-lock.yaml
+      - name: Install the checker
+        working-directory: estate/conformance
+        run: pnpm install --frozen-lockfile
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE CANARY. It runs before the verdict, on every run, and it is why a green from this job
+      # means something.
+      #
+      # A known-bad account type — the exact defect found in worlds, emberkin and settlement — is
+      # written into the checked-out estate, and the job fails unless the sweep goes red AND says the
+      # injected file's name. Grading on the exit code alone would accept a red produced by a broken
+      # checkout, an unresolvable import or a missing subcommand, which is to say it would accept
+      # every way this job can quietly stop measuring the estate.
+      #
+      # The write is asserted before, and the deletion asserted after: this estate has already had a
+      # canary that graded a file it never changed.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: The canary — this job can still go red
+        working-directory: estate/conformance
+        run: |
+          set -uo pipefail
+          canary="${ESTATE}/ledger/src/__estate_ci_canary.ts"
+          if [ ! -d "${ESTATE}/ledger/src" ]; then
+            echo "::error::micro-ledger has no src/ in this checkout, so the canary cannot be planted"
+            exit 1
+          fi
+          cat > "$canary" <<'CANARY'
+          // Written by estate-ci and deleted a few lines later. It is the defect found in
+          // micro-worlds, micro-emberkin and micro-settlement: platform fee income debited as an
+          // expense against the `revenue` six other services credit. If the sweep does not see this,
+          // the sweep is not seeing the estate either.
+          export const canary = { subject: 'platform', assetCode: 'EMBER', purpose: 'fees', type: 'expense' }
+          CANARY
+          if [ ! -s "$canary" ]; then
+            echo "::error::the canary file was not written — a canary that grades an unchanged tree grades nothing"
+            exit 1
+          fi
+
+          set +e
+          node --import tsx src/cli.ts ledger-accounts --estate .. > "$RUNNER_TEMP/canary.txt" 2>&1
+          code=$?
+          set -e
+          rm -f "$canary"
+          if [ -e "$canary" ]; then
+            echo "::error::the canary survived, so the real sweep below would judge a tree this job broke"
+            exit 1
+          fi
+
+          if [ "$code" -eq 0 ]; then
+            echo "::error::the sweep stayed GREEN with a known-bad account type injected — it is measuring nothing"
+            cat "$RUNNER_TEMP/canary.txt"
+            exit 1
+          fi
+          if ! grep -q '__estate_ci_canary.ts' "$RUNNER_TEMP/canary.txt"; then
+            echo "::error::the sweep exited ${code} but never named the injected file — it went red for another reason"
+            echo "A red for the wrong reason is how a check stops measuring what it claims to."
+            cat "$RUNNER_TEMP/canary.txt"
+            exit 1
+          fi
+          echo "ok: the sweep exited ${code} and named the injected account — the gate can fail"
+
+      # `always()` so the estate still gets a verdict when the canary is what broke. The two answers
+      # are different questions — "does the machinery work" and "does the estate agree" — and a run
+      # that reports only the first is a run that hides the second.
+      - name: The estate agrees on every ledger account type it states
+        if: always()
+        working-directory: estate/conformance
+        run: |
+          set -uo pipefail
+          node --import tsx src/cli.ts ledger-accounts --estate .. 2>&1 | tee "$RUNNER_TEMP/report.txt"
+          exit "${PIPESTATUS[0]}"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # A red with an owner. See "WHERE A FAILURE LANDS" in the header: without this, the schedule's
+      # entire output is a run record that ages out and an email nobody is on.
+      #
+      # Only on `schedule` and `push`. A pull request already reports to its author on the pull
+      # request itself, and filing an issue per pull-request run is how a label becomes noise.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: File the failure against somebody
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'push')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          {
+            echo "\`estate-ci\` failed: <${RUN_URL}>"
+            echo
+            echo "Two services name one ledger account key with two \`type\`s, or the sweep itself broke."
+            echo "The second service to post in production has **every** entry refused —"
+            echo "\`AccountConflictError\`, \`ledger/src/accounts.ts:125\` — and no per-service suite can see it."
+            echo
+            echo '```'
+            tail -c 60000 "$RUNNER_TEMP/report.txt" 2>/dev/null || echo "(the sweep produced no report — read the run)"
+            echo '```'
+          } > "$RUNNER_TEMP/issue.md"
+
+          gh label create estate-invariant --repo "$REPO" --color B60205 \
+            --description "An invariant that spans repositories, so no single repository's CI can see it" \
+            --force > /dev/null 2>&1 || true
+
+          open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
+                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$REPO" --body-file "$RUNNER_TEMP/issue.md" \
+              || echo "::warning::could not comment on issue #${open} — is issues:write granted?"
+            echo "updated issue #${open}"
+          else
+            gh issue create --repo "$REPO" --label estate-invariant \
+              --title "estate-ci: the estate disagrees about a ledger account type" \
+              --body-file "$RUNNER_TEMP/issue.md" \
+              || echo "::warning::could not open an issue — is issues:write granted?"
+          fi
+
+      - name: Close it when the estate agrees again
+        if: success() && (github.event_name == 'schedule' || github.event_name == 'push')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
+                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          [ -n "$open" ] || { echo "ok: nothing open"; exit 0; }
+          gh issue close "$open" --repo "$REPO" \
+            --comment "The sweep is green again: <${RUN_URL}>" \
+            || echo "::warning::could not close issue #${open}"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE NEXT TWO CHECKS BELONG HERE, AND ARE A STEP EACH RATHER THAN A NEW MECHANISM.
+      #
+      #   * SCOPE REGISTRY TOTALITY. service-ci.yml already derives every scope a service DEMANDS and
+      #     fails on one the registry lacks — but only ever for one service at a time, so it can
+      #     never answer the other direction: a scope the registry declares that no service in the
+      #     estate demands is a scope identity will happily mint for a surface that does not exist.
+      #     That question needs the union of 55 repositories, which is exactly the checkout above.
+      #   * TOPIC REGISTRY RECONCILIATION. `identity/src/topics.ts` names what is produced and
+      #     `notify/src/topics.ts` names what is consumed; a producer with no consumer and a consumer
+      #     with no producer are both invisible to either repository's CI, because each repository
+      #     holds one side of the pair.
+      #
+      # Both are the same shape as the sweep above — read the whole estate, reconcile two halves that
+      # live in different repositories — and both want the same canary discipline: a step that is not
+      # shown to fail is a step that will one day stop passing for a reason nobody notices.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
