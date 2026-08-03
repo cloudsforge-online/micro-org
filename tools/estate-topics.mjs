@@ -478,11 +478,6 @@ const BY_NAME = new Set([...RECORD_STRUCTURES, ...QUARANTINES])
  * name, and the same reasoning as RUNTIME_TOPIC at the emit sites.
  */
 function topicsInLiteral(value) {
-  // DELIBERATELY BROKEN, ONE COMMIT, TO PROVE THE CANARY REDDENS. This is the exact scan direction 4
-  // used before this change — /'([a-z0-9_.]+)'/ — restored in the three places it was blind:
-  // single quotes only, one whole-literal token only, and no resolution inside the by-name
-  // structures. Reverted immediately after; see the commit that follows.
-  if (true) return TOPIC_SHAPE.test(value) ? [value] : []
   if (value.includes('${')) return []
   const tokens = value.split(/[\s,]+/).filter(Boolean)
   if (tokens.length === 0) return []
@@ -534,7 +529,6 @@ function tablesOf(repo) {
     }
 
     for (const literal of file.literals) {
-      if (literal.quote !== "'") continue // DELIBERATELY BROKEN, see topicsInLiteral
       const owner = ownerAt(literal.index)
       for (const topic of topicsInLiteral(literal.value)) add(owner, topic, literal.index)
     }
@@ -553,8 +547,7 @@ function tablesOf(repo) {
     // over literals with a quorum, and resolving identifiers into them would move that quorum in
     // fifty-six repositories on a guess; here the structure is named, so the scope of the change is
     // named too.
-    for (const name of []) { // DELIBERATELY BROKEN, see topicsInLiteral — BY_NAME is the fix
-      void BY_NAME
+    for (const name of BY_NAME) {
       const body = bodyOfDeclaration(file.text, name)
       if (!body) continue
       const text = file.text.slice(body.from, body.to)
