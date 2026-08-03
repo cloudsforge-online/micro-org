@@ -552,6 +552,23 @@ jobs:
       # each other, they are read from one checkout only because cloning it twice would be silly, and
       # a run that reports the first failure and stops turns "the estate is wrong in three ways" into
       # three nights of work instead of one.
+      # TEMPORARY — REVERTED IN THE NEXT COMMIT. The canary above proves the SWEEP goes red; this
+      # proves the STEP does, and that its report reaches the issue. Same reasoning, and the same
+      # shape, as the commit that proved the ledger verdict's failure path once on main.
+      - name: TEMPORARY — leave the scope injections in place to prove the failure path
+        if: always()
+        run: |
+          set -uo pipefail
+          registry="${ESTATE}/contracts/packages/auth/src/index.ts"
+          sed "s|^export const SCOPES = Object.freeze({|&\n  'canary:orphan': Object.freeze({ service: 'canary', description: 'Left in place, once, on purpose.' }),|" \
+            "$registry" > "${RUNNER_TEMP}/injected.ts"
+          mv "${RUNNER_TEMP}/injected.ts" "$registry"
+          cat > "${ESTATE}/beacon/src/__estate_ci_scope_canary.ts" <<'GATE'
+          export function estateCiCanaryGate(principal: { readonly scopes: readonly string[] }): boolean {
+          return principal.scopes.includes('notify:send')
+          }
+          GATE
+
       - name: Every registered scope is demanded by a gate somewhere in the estate
         if: always()
         run: |
@@ -640,6 +657,23 @@ jobs:
             exit 1
           fi
           echo "ok: the sweep exited ${code} and named both injections — names AND reachability are being measured"
+
+      # TEMPORARY — REVERTED IN THE NEXT COMMIT. As above, for the topic verdict: an unemitted
+      # registered topic and an emitter nothing calls, left in place once so the red is a fact in
+      # this repository's history rather than a claim in a commit message.
+      - name: TEMPORARY — leave the topic injections in place to prove the failure path
+        if: always()
+        run: |
+          set -uo pipefail
+          registry="${ESTATE}/contracts/packages/events/src/index.ts"
+          sed "s|^export const TOPICS = Object.freeze({|&\n  'canary.estate.injected': Object.freeze({ producer: 'identity', payloadType: 'CanaryInjected', version: '1.0', keyedBy: 'user_id', description: 'Left in place, once, on purpose.' }),|" \
+            "$registry" > "${RUNNER_TEMP}/injected.ts"
+          mv "${RUNNER_TEMP}/injected.ts" "$registry"
+          cat > "${ESTATE}/identity/src/__estate_ci_topic_canary.ts" <<'EMITTER'
+          export function emitEstateCiCanary(emit: (event: { topic: string; key: string; payload: Record<string, unknown> }) => void): void {
+          emit({ topic: 'identity.session.created', key: 'canary', payload: {} })
+          }
+          EMITTER
 
       - name: The registry, the producers and the consumers agree about the bus
         if: always()
