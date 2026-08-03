@@ -654,10 +654,29 @@ test('every recorded estate topic gap names an owner, its evidence, and why it i
     parsed.gaps !== null && typeof parsed.gaps === 'object' && !Array.isArray(parsed.gaps),
     'estate-topic-gaps.json must hold a `gaps` object — without one the loop below asserts nothing about zero records and passes',
   )
-  // The kinds estate-topics.mjs can actually produce. `stale:x` used to parse, sit in the file
-  // looking like a known issue, and surface only as "no longer describes the estate — delete it":
-  // the message for a gap that has been FIXED, on a record that never described anything.
-  const KINDS = ['unemitted', 'unregistered', 'unproduced', 'stale-record']
+  // The kinds estate-topics.mjs can actually produce — READ OUT OF THE CHECKER, not re-typed here.
+  // Closing the set matters: `stale:x` used to parse, sit in the file looking like a known issue,
+  // and surface only as "no longer describes the estate — delete it", which is the message for a
+  // gap that has been FIXED, on a record that never described anything.
+  //
+  // It was a hand-copy of that closed set, and it drifted the same day, exactly the way the test
+  // above ('the scope union is built by service-ci.yml own derivation') says a second
+  // implementation always does. `unreachable` was added to the checker for direction 5 — an
+  // emitter nothing calls — and this list did not learn it, so a record the checker matched
+  // happily failed HERE as "no such finding kind": the suite reporting a typo against the one
+  // repository that had done the work correctly. A copy of a closed set is a closed set that goes
+  // stale silently, and the drift is invisible in exactly one direction, which is this one.
+  const CHECKER = readFileSync(new URL('../tools/estate-topics.mjs', import.meta.url), 'utf8')
+  const KINDS = [...(/const KINDS = new Set\(\[([^\]]+)\]\)/.exec(CHECKER)?.[1] ?? '').matchAll(/'([a-z-]+)'/g)].map(
+    (m) => m[1],
+  )
+  // A derivation that stops matching yields an empty set, which rejects every record rather than
+  // accepting every one — the safe direction — but it rejects them with the wrong sentence. Say
+  // what actually broke instead.
+  assert.ok(
+    KINDS.length >= 4,
+    'the finding kinds must be read out of tools/estate-topics.mjs, and `const KINDS = new Set([…])` no longer parses there',
+  )
   for (const [key, entry] of Object.entries(parsed.gaps)) {
     assert.match(key, /^[a-z-]+:[a-z0-9_.]+$/, `${key} must be '<kind>:<topic>'`)
     assert.ok(KINDS.includes(key.split(':')[0] ?? ''), `${key}: no such finding kind — a record that matches nothing`)

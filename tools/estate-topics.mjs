@@ -269,10 +269,21 @@ function valueAfter(text, at) {
   return out.trim()
 }
 
-/** `const NAME = 'x.y.z'` anywhere in this repository, or `NAME: 'x.y.z'` inside `const OBJ`. */
+/**
+ * `const NAME = 'x.y.z'` anywhere in this repository, or `NAME: 'x.y.z'` inside `const OBJ`.
+ *
+ * The cache separator is written `\u0000` and must stay written that way. It was a literal NUL
+ * BYTE in the source, here and at `resolveMember` below, which made this file binary to `grep`
+ * (`file` reported it as `data`, and `grep -n unreachable tools/estate-topics.mjs` printed
+ * nothing at all — not an error, nothing). git's own scan happened to still read it, because git
+ * only sniffs the first 8000 bytes and these sat at 11487 and 12050, so `secret-hygiene.yml`'s
+ * `git grep -nI` was never actually blind here. That is luck, not design: it is the same shape as
+ * the secret scan that returned zero because `grep -I` had discarded a binary stream, and a
+ * checker nobody can grep is a checker nobody audits. The escape is the identical string value.
+ */
 const IDENT_CACHE = new Map()
 function resolveIdentifier(repo, ident) {
-  const key = `${repo} ${ident}`
+  const key = `${repo}\u0000${ident}`
   if (IDENT_CACHE.has(key)) return IDENT_CACHE.get(key)
   const found = resolveIdentifierUncached(repo, ident)
   IDENT_CACHE.set(key, found)
@@ -291,7 +302,7 @@ function resolveIdentifierUncached(repo, ident) {
 
 const MEMBER_CACHE = new Map()
 function resolveMember(repo, object, member) {
-  const key = `${repo} ${object}.${member}`
+  const key = `${repo}\u0000${object}.${member}`
   if (MEMBER_CACHE.has(key)) return MEMBER_CACHE.get(key)
   const found = resolveMemberUncached(repo, object, member)
   MEMBER_CACHE.set(key, found)
