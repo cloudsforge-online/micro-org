@@ -503,12 +503,45 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
     assert.match(yaml, /the sweep stayed GREEN with a dead scope registered AND a dead scope demanded/)
     assert.match(yaml, /grep -q 'canary:orphan' "\$\{RUNNER_TEMP\}\/scope-canary\.txt"/)
     assert.match(yaml, /grep -q '__estate_ci_scope_canary\.ts' "\$\{RUNNER_TEMP\}\/scope-canary\.txt"/)
-    assert.match(yaml, /the sweep stayed GREEN with an unemitted registered topic AND a dead emitter/)
+    assert.match(yaml, /the sweep stayed GREEN with an unemitted registered topic, a dead emitter AND three stale records/)
     assert.match(yaml, /grep -q 'canary\.estate\.injected' "\$\{RUNNER_TEMP\}\/topic-canary\.txt"/)
     assert.match(yaml, /grep -q 'emitEstateCiCanary' "\$\{RUNNER_TEMP\}\/topic-canary\.txt"/)
     // …and both must prove the injection was written, and then proven gone.
     assert.match(yaml, /the injections were not written/)
     assert.match(yaml, /an injection survived/)
+  })
+
+  it('the topic canary plants the record shapes direction 4 was blind to, and grades each by name', () => {
+    // The defect this replaces: direction 4 scanned record structures with /'([a-z0-9_.]+)'/, so
+    // `emits: 'trade.bot.created, trade.bot.started, trade.bot.paused'` — one literal naming three
+    // topics trade really emits — matched nothing, and a stale record for trade.bot.paused hid for
+    // weeks while the sweep printed "everything else reconciles". Exit codes could never find it:
+    // the sweep was red the whole time for unrelated findings. Only an injection whose ABSENCE from
+    // the output is the failure can.
+    const step = yaml.slice(yaml.indexOf('- name: The canary — the topic sweep can still go red'))
+    const canary = step.slice(0, step.indexOf('- name: The registry, the producers'))
+    assert.match(canary, /__estate_ci_record_canary\.ts/, 'the record structure must actually be planted')
+    assert.match(canary, /UNPRODUCED_NOTIFICATIONS/, 'and under the name direction 4 reads BY NAME')
+    // The three shapes, each one a thing the old scan could not read.
+    assert.match(canary, /emits: 'identity\.session\.created, ledger\.entry\.posted'/, 'a comma-joined list')
+    assert.match(canary, /emits: ESTATE_CI_CANARY_TOPIC/, 'a constant, the shape every producer uses for its own emits')
+    assert.match(canary, /emits: "wallet\.deposit\.confirmed"/, 'a double-quoted literal — there are three quote styles')
+    // Graded on the line, not the name: `ledger.entry.posted` is quoted inside a recorded gap's own
+    // evidence, so a bare grep for it would pass a run in which direction 4 read nothing at all.
+    assert.match(
+      canary,
+      /grep -q "\$\{topic\}: notify records at notify\/src\/__estate_ci_record_canary\.ts"/,
+      'each injected topic must be named on a line citing the injected file',
+    )
+    for (const topic of [
+      'identity.session.created',
+      'ledger.entry.posted',
+      'market.listing.sold',
+      'wallet.deposit.confirmed',
+    ]) {
+      assert.ok(canary.includes(topic), `${topic} must be one of the names the canary demands back`)
+    }
+    assert.match(canary, /rm -f "\$emitter" "\$record"/, 'and the record must be proven gone before the real sweep')
   })
 
   it('the scope union is built by service-ci.yml own derivation, not a copy of it', () => {
@@ -544,19 +577,37 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
  * — a record that outlives its finding fails — is in the checker itself and is exercised by the
  * canary; this is the half that can rot by hand.
  */
-test('every recorded estate topic gap names an owner and carries its evidence', () => {
+test('every recorded estate topic gap names an owner, its evidence, and why it is still here', () => {
   const raw = readFileSync(new URL('../tools/estate-topic-gaps.json', import.meta.url), 'utf8')
-  const parsed = JSON.parse(raw) as { gaps: Record<string, { owner?: string; evidence?: string }> }
+  const parsed = JSON.parse(raw) as {
+    gaps: Record<string, { owner?: string; evidence?: string; status?: string; until?: string; recordedAt?: string }>
+  }
   const keys = Object.keys(parsed.gaps)
   assert.ok(keys.length > 0, 'an empty ledger means the estate reconciles — delete this test then, deliberately')
+  // The kinds estate-topics.mjs can actually produce. `stale:x` used to parse, sit in the file
+  // looking like a known issue, and surface only as "no longer describes the estate — delete it":
+  // the message for a gap that has been FIXED, on a record that never described anything.
+  const KINDS = ['unemitted', 'unregistered', 'unproduced', 'stale-record']
   for (const [key, entry] of Object.entries(parsed.gaps)) {
     assert.match(key, /^[a-z-]+:[a-z0-9_.]+$/, `${key} must be '<kind>:<topic>'`)
+    assert.ok(KINDS.includes(key.split(':')[0] ?? ''), `${key}: no such finding kind — a record that matches nothing`)
     assert.match(entry.owner ?? '', /^micro-[a-z-]+$/, `${key} must name the repository that can repair it`)
     assert.ok(
       (entry.evidence ?? '').length >= 80,
       `${key}: under eighty characters of evidence is a hole, not a decision`,
     )
     assert.match(entry.evidence ?? '', /\.ts:\d+/, `${key}: evidence must cite a file and a line, not a summary`)
+    assert.match(entry.recordedAt ?? '', /^\d{4}-\d{2}-\d{2}$/, `${key}: a record with no age cannot be seen to rot`)
+    // `status` is what the first nine were missing. Two of them were not omissions at all but
+    // decisions taken in micro-notify, with the one field each needs written down; recorded as
+    // omissions they read as neglect. A `deferred` with no `until` is an exemption with better
+    // manners, so the end condition is required and an `unfixed` may not carry one.
+    assert.ok(['unfixed', 'deferred'].includes(entry.status ?? ''), `${key}: status must be unfixed or deferred`)
+    if (entry.status === 'deferred') {
+      assert.ok((entry.until ?? '').length >= 40, `${key}: a deferral must state the condition that ends it`)
+    } else {
+      assert.equal(entry.until, undefined, `${key}: 'until' belongs to a deferred record`)
+    }
   }
 })
 

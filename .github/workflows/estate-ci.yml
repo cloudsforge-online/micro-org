@@ -148,12 +148,22 @@ name: estate-ci
 # is emitted by four browsers, and "no producer emits it" would be a confident falsehood. Those are
 # printed as unjudged rather than passed silently.
 #
-# `tools/estate-topic-gaps.json` records the nine disagreements the FIRST estate-wide run found —
-# with evidence, an owning repository and the repair. It is a ratchet, not an exemption list: a new
-# instance is red on the day it lands, and a recorded one that gets fixed is ALSO red until the
-# record is deleted. The file argues its own existence at the top; the short version is that none of
-# the nine is fixable in micro-org, and a gate that is red from birth for other people's defects is a
-# gate somebody switches off within the week.
+# The CONSUMER TABLES of direction 3 are still read as literals with a quorum, and a rule table built
+# out of constants is invisible to it. That is deliberate rather than overlooked: the record
+# structures direction 4 reads are named (`UNPRODUCED_NOTIFICATIONS`, `AWAITING_REGISTRATION`) and so
+# resolving identifiers inside them changes a known thing, while moving the quorum in fifty-six
+# repositories on a guess changes an unknown number of verdicts in both directions.
+#
+# `tools/estate-topic-gaps.json` records the disagreements this sweep has found that micro-org cannot
+# fix — with evidence, an owning repository, and now a `status` saying whether the finding is simply
+# unfixed or DEFERRED with the condition that ends the deferral. It is a ratchet, not an exemption
+# list: a new instance is red on the day it lands, and a recorded one that gets fixed is ALSO red
+# until the record is deleted — five of the first nine went red that way within a day, which is the
+# normal case rather than the exception. The file argues its own existence at the top, and records
+# what the first nine taught it: that evidence can be wrong (the custody record said an export path
+# "completed in silence" when it was emitting under a name nobody knew), and that one record
+# suppresses a finding by `<kind>:<topic>` alone, so every absorbed finding is printed even where the
+# file describes one.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
 on:
@@ -585,14 +595,35 @@ jobs:
       # reference. Comments are stripped here before anything is matched, and the checker's header
       # says so at the stripper.)
       # ════════════════════════════════════════════════════════════════════════════════════════════
-      - name: The canary — the topic sweep can still go red, by name and by reachability
+      # THE THIRD INJECTION BELOW IS A REGRESSION TEST FOR THIS CHECKER, NOT FOR THE ESTATE.
+      #
+      # Direction 4 — "a record whose premise expired" — read the record structures with
+      # `/'([a-z0-9_.]+)'/`, which needs the quotes to touch the name. notify recorded
+      # `emits: 'trade.bot.created, trade.bot.started, trade.bot.paused'`, one literal naming three
+      # topics trade really emits, and the comma meant it matched nothing: no members, no question
+      # asked, and the sweep printed "everything else reconciles". A stale record hid behind that for
+      # weeks, beside an identical record that happened to name one topic and was caught at once.
+      #
+      # That is this estate's signature defect — a check that cannot fail — living inside the check
+      # written to catch it, and NO exit-code grading finds it, because the sweep was red the whole
+      # time for other reasons. Only an injection whose absence from the output is the failure does.
+      # So three shapes are planted in one record structure and all four names must be NAMED, each
+      # on a line citing the injected file: a comma-joined list, a resolved constant (the shape every
+      # producer already uses for its own emits) and a double-quoted literal (the scan saw one of
+      # JavaScript's three quote styles). If any is skipped in silence again, this step is red.
+      - name: The canary — the topic sweep can still go red, by name, by reachability and by record
         if: always()
         run: |
           set -uo pipefail
           registry="${ESTATE}/contracts/packages/events/src/index.ts"
           emitter="${ESTATE}/identity/src/__estate_ci_topic_canary.ts"
+          record="${ESTATE}/notify/src/__estate_ci_record_canary.ts"
           if [ ! -f "$registry" ] || [ ! -d "${ESTATE}/identity/src" ]; then
             echo "::error::the events registry or micro-identity is missing from this checkout — the canary cannot be planted"
+            exit 1
+          fi
+          if [ ! -d "${ESTATE}/notify/src" ]; then
+            echo "::error::micro-notify has no src/ here, so the record half of the canary cannot be planted"
             exit 1
           fi
           cp "$registry" "${RUNNER_TEMP}/events-index.orig"
@@ -608,8 +639,20 @@ jobs:
           emit({ topic: 'identity.session.created', key: 'canary', payload: {} })
           }
           EMITTER
+          # (c) a record structure saying three facts are unproduced, in the three shapes direction 4
+          #     could not read. Every topic named here is one a live producer really emits, so each
+          #     is a genuine stale record and direction 4 owes an answer about all four. None is in
+          #     tools/estate-topic-gaps.json, so none can be absorbed as a recorded gap and pass.
+          cat > "$record" <<'RECORD'
+          const ESTATE_CI_CANARY_TOPIC = 'market.listing.sold'
+          export const UNPRODUCED_NOTIFICATIONS = [
+          { requirement: 'estate-ci canary, a comma-joined list', emits: 'identity.session.created, ledger.entry.posted' },
+          { requirement: 'estate-ci canary, a resolved constant', emits: ESTATE_CI_CANARY_TOPIC },
+          { requirement: 'estate-ci canary, a double-quoted literal', emits: "wallet.deposit.confirmed" },
+          ]
+          RECORD
 
-          if ! grep -q 'canary.estate.injected' "$registry" || [ ! -s "$emitter" ]; then
+          if ! grep -q 'canary.estate.injected' "$registry" || [ ! -s "$emitter" ] || [ ! -s "$record" ]; then
             echo "::error::the injections were not written — a canary that grades an unchanged tree grades nothing"
             exit 1
           fi
@@ -620,26 +663,33 @@ jobs:
           code=$?
           set -e
           cp "${RUNNER_TEMP}/events-index.orig" "$registry"
-          rm -f "$emitter"
-          if grep -q 'canary.estate.injected' "$registry" || [ -e "$emitter" ]; then
+          rm -f "$emitter" "$record"
+          if grep -q 'canary.estate.injected' "$registry" || [ -e "$emitter" ] || [ -e "$record" ]; then
             echo "::error::an injection survived, so the real sweep below would judge a tree this job broke"
             exit 1
           fi
 
           if [ "$code" -eq 0 ]; then
-            echo "::error::the sweep stayed GREEN with an unemitted registered topic AND a dead emitter — it is measuring nothing"
+            echo "::error::the sweep stayed GREEN with an unemitted registered topic, a dead emitter AND three stale records — it is measuring nothing"
             cat "${RUNNER_TEMP}/topic-canary.txt"
             exit 1
           fi
           missed=0
           grep -q 'canary.estate.injected' "${RUNNER_TEMP}/topic-canary.txt" || { echo "::error::red, but never named the injected registered-and-unemitted topic"; missed=1; }
           grep -q 'emitEstateCiCanary' "${RUNNER_TEMP}/topic-canary.txt" || { echo "::error::red, but never named the injected emitter that nothing calls"; missed=1; }
+          # Each of the four must be named ON A LINE CITING THE INJECTED FILE. A bare name is not a
+          # grade: `ledger.entry.posted` is quoted in a recorded gap's own evidence and would match a
+          # run in which direction 4 read nothing at all.
+          for topic in identity.session.created ledger.entry.posted market.listing.sold wallet.deposit.confirmed; do
+            grep -q "${topic}: notify records at notify/src/__estate_ci_record_canary.ts" "${RUNNER_TEMP}/topic-canary.txt" \
+              || { echo "::error::red, but direction 4 never named ${topic} from the injected record — it skipped a shape in silence"; missed=1; }
+          done
           if [ "$missed" -ne 0 ]; then
             echo "A red for the wrong reason is how a check stops measuring what it claims to."
             cat "${RUNNER_TEMP}/topic-canary.txt"
             exit 1
           fi
-          echo "ok: the sweep exited ${code} and named both injections — names AND reachability are being measured"
+          echo "ok: the sweep exited ${code} and named every injection — names, reachability AND the record structures are being measured"
 
       - name: The registry, the producers and the consumers agree about the bus
         if: always()

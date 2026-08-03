@@ -21,6 +21,31 @@
 // Anything at a `topic:` value position that cannot be resolved is FATAL rather than skipped: the
 // verdicts below say "nobody emits this", and that sentence is only true if the emitted set is
 // complete. Fail, do not guess.
+//
+// THE OTHER HALF READS RECORDS, AND USED TO READ THEM WORSE THAN IT READS EMITS.
+//
+// Directions 3 and 4 read structures in other repositories — consumer rule tables, and the
+// `UNPRODUCED_NOTIFICATIONS` / `AWAITING_REGISTRATION` structures this file knows by name. Those
+// were scanned with `/'([a-z0-9_.]+)'/`: one of JavaScript's three quote styles, no nesting, and
+// only ever a literal that is a whole topic and nothing else. So
+//
+//     emits: 'trade.bot.created, trade.bot.started, trade.bot.paused'
+//
+// matched NOTHING — the comma is not in the character class — the record had no members, direction 4
+// asked no question about it, and the run said "everything else reconciles in both directions". A
+// stale record for `trade.bot.paused` hid there for weeks, next to an identical record that happened
+// to name one topic and was caught on the first run.
+//
+// That is this estate's signature defect, a check that cannot fail, inside the check written to
+// catch it, and nothing but a canary finds it: the sweep was red the entire time for other reasons,
+// so every exit code was the expected one. `stripComments` now hands back every literal it walks,
+// `topicsInLiteral` splits a list from prose, and the by-name structures get the SAME constant and
+// member resolution the emit sites get. estate-ci.yml plants all three shapes on every run and
+// fails unless each is named.
+//
+// The asymmetry that remains is written down at `tablesOf`: the consumer tables of direction 3 are
+// still a heuristic over literals, because their quorum is calibrated against fifty-six
+// repositories and the named structures are not.
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -62,11 +87,19 @@ if (REGISTRY.size < MIN_TOPICS) {
 const TOPIC_SHAPE = /^[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*){2}$/
 
 /**
- * Comments out, strings kept.
+ * Comments out, strings kept — and every string literal handed back as a token.
  *
  * Six guards in this estate have fired on their own prose, and one — identity's
  * `unreferencedEmitters` — PASSED because the paragraph naming the dead function counted as a call
  * site. The same stripper as the scope audit in service-ci.yml, for the same reason.
+ *
+ * `literals` is the list this walk already knows and used to throw away. Everything downstream that
+ * wants a string used to re-find them with `/'([a-z0-9_.]+)'/`, which is wrong in three ways at
+ * once: it sees ONE quote style of the three JavaScript has, it cannot see a quote nested inside
+ * another kind of quote (so an apostrophe in a double-quoted sentence opens a phantom literal that
+ * runs to the next one), and it can only ever read a literal that is a whole topic and nothing else.
+ * The third of those is what hid a stale record for `trade.bot.paused` for weeks — see
+ * `topicsInLiteral`.
  */
 function stripComments(text) {
   let out = ''
@@ -74,6 +107,8 @@ function stripComments(text) {
   // `notify/src/events.ts:70` builds the message `topic: "${topic}" is not in this registry`, and a
   // checker that read that as an emit site would demand the estate emit a sentence.
   const inString = []
+  /** { value, index, quote } for each literal, `index` in the STRIPPED text so lineOf agrees. */
+  const literals = []
   let i = 0
   const n = text.length
   const push = (c, quoted) => {
@@ -98,26 +133,31 @@ function stripComments(text) {
     }
     if (c === "'" || c === '"' || c === '`') {
       const quote = c
+      const at = out.length
+      let value = ''
       push(c, false)
       i++
       while (i < n && text[i] !== quote) {
         if (text[i] === '\\') {
           push(text[i], true)
           push(text[i + 1] ?? '', true)
+          value += text[i + 1] ?? ''
           i += 2
           continue
         }
+        value += text[i]
         push(text[i], true)
         i++
       }
       push(text[i] ?? '', false)
       i++
+      literals.push({ value, index: at, quote })
       continue
     }
     push(c, false)
     i++
   }
-  return { text: out, inString }
+  return { text: out, inString, literals }
 }
 
 function collect(dir, out = []) {
@@ -214,7 +254,16 @@ function valueAfter(text, at) {
 }
 
 /** `const NAME = 'x.y.z'` anywhere in this repository, or `NAME: 'x.y.z'` inside `const OBJ`. */
+const IDENT_CACHE = new Map()
 function resolveIdentifier(repo, ident) {
+  const key = `${repo} ${ident}`
+  if (IDENT_CACHE.has(key)) return IDENT_CACHE.get(key)
+  const found = resolveIdentifierUncached(repo, ident)
+  IDENT_CACHE.set(key, found)
+  return found
+}
+
+function resolveIdentifierUncached(repo, ident) {
   for (const file of sources.get(repo) ?? []) {
     const decl = new RegExp(`\\b(?:const|let|var)\\s+${ident}\\s*(?::[^=\\n]{0,80})?=\\s*'([a-z0-9_.]+)'`).exec(file.text)
     if (decl) return decl[1]
@@ -222,7 +271,16 @@ function resolveIdentifier(repo, ident) {
   return null
 }
 
+const MEMBER_CACHE = new Map()
 function resolveMember(repo, object, member) {
+  const key = `${repo} ${object}.${member}`
+  if (MEMBER_CACHE.has(key)) return MEMBER_CACHE.get(key)
+  const found = resolveMemberUncached(repo, object, member)
+  MEMBER_CACHE.set(key, found)
+  return found
+}
+
+function resolveMemberUncached(repo, object, member) {
   for (const file of sources.get(repo) ?? []) {
     const start = new RegExp(`\\b(?:const|let|var)\\s+${object}\\s*(?::[^=\\n]{0,120})?=\\s*(?:Object\\.freeze\\()?\\{`).exec(
       file.text,
@@ -340,6 +398,35 @@ const EMITS = new Map(repos.map((repo) => [repo, sources.has(repo) ? emitsOf(rep
 const emits = (repo, topic) => (EMITS.get(repo)?.get(topic)?.length ?? 0) > 0
 const emitSite = (repo, topic) => EMITS.get(repo)?.get(topic)?.[0]?.where ?? '(nowhere)'
 
+/**
+ * What a service puts on the bus under a name no registry knows.
+ *
+ * "NOBODY EMITS THIS" IS TWO FINDINGS WITH TWO DIFFERENT REPAIRS, and this file used to print one
+ * sentence for both. `custody.key.exported` was recorded here as custody's export path "completing
+ * in silence"; it was not silent. `custody/src/exports.ts:422` was emitting
+ * `custody.export.completed` — a name in no registry, with no subscriber anywhere in the estate —
+ * while `custody.key.exported` was named in seven places across five repositories, including a
+ * CRITICAL notify rule. The repair was a rename in one repository. Read as written, the record
+ * pointed at "add an emit", which is five registrations and three rules more expensive and leaves
+ * the orphan emit behind.
+ *
+ * This checker already knows the difference: it derived the producer's emits to answer the question
+ * in the first place, and the census below has been printing the count for both runs. So the
+ * verdict says which of the two it is, and names the candidates, rather than making the next reader
+ * guess and get it wrong the way the first record did.
+ */
+function unregisteredEmitsOf(repo) {
+  return [...(EMITS.get(repo) ?? new Map()).keys()].filter((topic) => !REGISTRY.has(topic)).sort()
+}
+
+function orUnderAnotherName(producer, topic) {
+  const others = unregisteredEmitsOf(producer)
+  if (others.length === 0) {
+    return `${producer} emits nothing this registry does not name, so the fact is not on the bus under another spelling either — the repair is an emit, not a rename.`
+  }
+  return `Before writing a new emit: ${producer} DOES emit ${others.length} topic(s) no registry names — ${others.join(', ')} — and one of them may be '${topic}' under a name nobody else knows. That is what custody.key.exported turned out to be, and the two findings look identical from here while their repairs differ by four repositories.`
+}
+
 const PRODUCERS = new Set(REGISTRY.values())
 const withSource = [...PRODUCERS].filter((p) => sources.has(p))
 if (withSource.length < MIN_PRODUCERS_WITH_SOURCE) {
@@ -361,21 +448,116 @@ if (withSource.length < MIN_PRODUCERS_WITH_SOURCE) {
 const TABLE_QUORUM = 3
 const RECORD_STRUCTURES = new Set(['UNPRODUCED_NOTIFICATIONS'])
 const QUARANTINES = new Set(['AWAITING_REGISTRATION'])
+/** The structures this file reads BY NAME, and therefore owes the same resolver as an emit site. */
+const BY_NAME = new Set([...RECORD_STRUCTURES, ...QUARANTINES])
+
+/**
+ * The topic names a single string literal states.
+ *
+ * THE DEFECT THIS REPLACES, because it is the estate's signature class living inside the check
+ * built to catch it. `notify/src/topics.ts` used to record
+ *
+ *     emits: 'trade.bot.created, trade.bot.started, trade.bot.paused'
+ *
+ * — one literal naming three topics trade really emits — and the scan that fed direction 4 was
+ * `/'([a-z0-9_.]+)'/`, which requires the quotes to touch the name. A comma is not in that class,
+ * so the literal matched NOTHING, so the record had no members, so direction 4 asked no question
+ * about it and the sweep said "everything else reconciles". A stale record for `trade.bot.paused`
+ * hid behind that for weeks, next to an identical record that happened to name one topic and was
+ * found immediately. A check that silently reads less than it claims is worse than no check: it
+ * reports the gap as measured.
+ *
+ * So a literal is now SPLIT, and accepted only when EVERY token is topic-shaped. That is the line
+ * between a list and prose, and it has to be drawn somewhere: these structures also carry
+ * `evidence` paragraphs that name topics mid-sentence, and promoting those to members would make
+ * every argument about a topic a claim about it. One token or seven, all of them names — a list.
+ * One sentence mentioning a name — prose, and `evidence` is where the header of the record
+ * structure says prose belongs.
+ *
+ * A template literal with a substitution is refused outright: `${x}.bot.paused` is a shape, not a
+ * name, and the same reasoning as RUNTIME_TOPIC at the emit sites.
+ */
+function topicsInLiteral(value) {
+  if (value.includes('${')) return []
+  const tokens = value.split(/[\s,]+/).filter(Boolean)
+  if (tokens.length === 0) return []
+  if (!tokens.every((t) => TOPIC_SHAPE.test(t))) return []
+  return tokens
+}
+
+/** The `{…}` or `[…]` body of `const NAME = …` in one file, or null. */
+function bodyOfDeclaration(text, name) {
+  const start = new RegExp(
+    `\\b(?:export\\s+)?(?:const|let|var)\\s+${name}\\s*(?::[^=\\n]{0,200})?=\\s*(?:Object\\.freeze\\()?[[{]`,
+  ).exec(text)
+  if (!start) return null
+  const from = start.index + start[0].length - 1
+  const open = text[from]
+  const close = open === '[' ? ']' : '}'
+  let depth = 0
+  let end = from
+  while (end < text.length) {
+    if (text[end] === open) depth++
+    if (text[end] === close) {
+      depth--
+      if (depth === 0) break
+    }
+    end++
+  }
+  return { from, to: end }
+}
 
 function tablesOf(repo) {
   const groups = new Map()
   for (const file of sources.get(repo) ?? []) {
     const decls = [...file.text.matchAll(/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/gm)]
-    for (const m of file.text.matchAll(/'([a-z0-9_.]+)'/g)) {
-      if (!TOPIC_SHAPE.test(m[1])) continue
+    const ownerAt = (index) => {
       let owner = null
       for (const d of decls) {
-        if (d.index < m.index) owner = d[1]
+        if (d.index < index) owner = d[1]
         else break
       }
+      return owner
+    }
+    const add = (owner, topic, index) => {
       const key = `${file.path}::${owner ?? '(top level)'}`
       if (!groups.has(key)) groups.set(key, { file: file.path, owner, members: [] })
-      groups.get(key).members.push({ topic: m[1], where: `${file.path}:${lineOf(file.text, m.index)}` })
+      const members = groups.get(key).members
+      const where = `${file.path}:${lineOf(file.text, index)}`
+      if (members.some((m) => m.topic === topic && m.where === where)) return
+      members.push({ topic, where })
+    }
+
+    for (const literal of file.literals) {
+      const owner = ownerAt(literal.index)
+      for (const topic of topicsInLiteral(literal.value)) add(owner, topic, literal.index)
+    }
+
+    // ── the same resolution the emit sites get, for the structures read BY NAME ──
+    //
+    // Directions 1–3 resolve `topic: SETTLEMENT_OUTBOUND_FAILED` and `topic: TOPICS.keyIssued` to
+    // the strings they name, and refuse to guess when they cannot. Direction 4 read raw literals
+    // and nothing else, so `emits: TRADE_BOT_PAUSED` — the shape half this estate's producers
+    // already use for their own emits — would have been just as invisible as the comma was. The
+    // record structures are a cross-repository agreement about shape (notify/src/topics.ts states
+    // it in a comment, which is the only place it has ever been written down), and an agreement one
+    // side reads with a weaker parser than the other is one refactor from silence.
+    //
+    // Scoped to those structures deliberately. The consumer TABLES of direction 3 are a heuristic
+    // over literals with a quorum, and resolving identifiers into them would move that quorum in
+    // fifty-six repositories on a guess; here the structure is named, so the scope of the change is
+    // named too.
+    for (const name of BY_NAME) {
+      const body = bodyOfDeclaration(file.text, name)
+      if (!body) continue
+      const text = file.text.slice(body.from, body.to)
+      for (const m of text.matchAll(/[:[,]\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*[,\]}\n]/g)) {
+        if (file.inString[body.from + m.index] === 1) continue
+        const expr = m[1]
+        const member = expr.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/)
+        const topic = member ? resolveMember(repo, member[1], member[2]) : resolveIdentifier(repo, expr)
+        if (topic && TOPIC_SHAPE.test(topic)) add(name, topic, body.from + m.index)
+      }
     }
   }
   return [...groups.values()]
@@ -402,6 +584,39 @@ function quarantined(repo) {
  * pattern (notify/src/topics.ts:106), moved to the only checkout that can see both halves.
  */
 const gaps = new Map()
+
+/**
+ * The kinds this file can produce. A record of any other kind can NEVER match a finding.
+ *
+ * It used to be `[a-z-]+`, so `stale:trade.bot.paused` parsed, sat in the file looking like a
+ * known issue, and surfaced only as "no longer describes the estate — delete it" at the bottom of a
+ * run: the message for a gap that has been FIXED, on a record that never described anything. Two
+ * opposite states, one sentence. The set is closed here so a typo is named as a typo.
+ */
+const KINDS = new Set(['unemitted', 'unregistered', 'unproduced', 'stale-record'])
+
+/**
+ * Why a record is still here — and it is not one question, which is what the first nine got wrong.
+ *
+ * All nine were written as "found, and somebody else must fix it". Two of them were not that at
+ * all: `settlement.outbound.failed` and `market.offer.made` are decisions, taken deliberately in
+ * micro-notify, with the reason and the one field each needs written down — notify's own records
+ * carry `blockedBy: 'no-subject'` and refuse to key a rule to an envelope that names nobody. A file
+ * that cannot tell a decision from an omission reads as an inventory of neglect, and the fix for
+ * that is the one notify already made for itself: a closed set of reasons, each implying something
+ * checkable.
+ *
+ *   - `unfixed`   — nobody has done it yet. `owner` names the repository whose change closes it.
+ *   - `deferred`  — it stays, on purpose, for now. `until` states the condition that ends the
+ *                   deferral, in a sentence somebody else can test against the estate. A deferral
+ *                   with no end condition is an exemption with better manners.
+ *
+ * There is deliberately no `wontfix`. A finding nobody will ever act on is not recorded here — it
+ * is fixed in the estate or it is argued out of the checker, and both of those leave this file
+ * empty rather than permanent.
+ */
+const STATUSES = new Set(['unfixed', 'deferred'])
+
 if (gapsPath && existsSync(gapsPath)) {
   let parsed
   try {
@@ -412,29 +627,70 @@ if (gapsPath && existsSync(gapsPath)) {
   }
   for (const [key, entry] of Object.entries(parsed.gaps ?? {})) {
     // `<kind>:<topic>`, because one topic can be wrong in two ways at once.
-    if (!/^[a-z-]+:[a-z0-9_.]+$/.test(key)) {
-      errors.push(`${gapsPath}: '${key}' is not a '<kind>:<topic>' key`)
+    const parts = /^([a-z-]+):(.+)$/.exec(key)
+    if (!parts || !KINDS.has(parts[1]) || !TOPIC_SHAPE.test(parts[2])) {
+      errors.push(
+        `${gapsPath}: '${key}' is not a '<kind>:<topic>' key this file can ever match — kind must be one of ${[...KINDS].sort().join(', ')} and the topic must be a legal topic name. A record that matches nothing is not a known issue, it is a typo that reads as one.`,
+      )
       continue
     }
-    if (typeof entry?.owner !== 'string' || typeof entry?.evidence !== 'string' || entry.evidence.length < 80) {
-      errors.push(
-        `${gapsPath}: the record for '${key}' names no owning repository, or its evidence is under eighty characters — that is a hole, not a decision`,
+    const problems = []
+    if (typeof entry?.owner !== 'string' || !/^micro-[a-z-]+$/.test(entry.owner)) {
+      problems.push('`owner` must be a `micro-<repository>` name — a gap nobody owns is a gap nobody closes')
+    } else if (!sources.has(entry.owner.replace(/^micro-/, '')) && !repos.includes(entry.owner.replace(/^micro-/, ''))) {
+      problems.push(`\`owner\` names '${entry.owner}', which is no repository in this checkout`)
+    }
+    if (typeof entry?.evidence !== 'string' || entry.evidence.length < 80) {
+      problems.push('`evidence` is missing or under eighty characters — that is a hole, not a decision')
+    }
+    if (typeof entry?.recordedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.recordedAt)) {
+      problems.push('`recordedAt` must be a YYYY-MM-DD date — a record with no age cannot be seen to be rotting')
+    }
+    if (typeof entry?.status !== 'string' || !STATUSES.has(entry.status)) {
+      problems.push(`\`status\` must be one of ${[...STATUSES].sort().join(', ')} — see STATUSES in this file`)
+    } else if (entry.status === 'deferred' && (typeof entry.until !== 'string' || entry.until.length < 40)) {
+      problems.push(
+        '`status` is `deferred`, so `until` must state the condition that ends the deferral, in at least forty characters. A deferral with no end condition is an exemption with better manners.',
       )
+    } else if (entry.status === 'unfixed' && entry.until !== undefined) {
+      problems.push('`until` belongs to a `deferred` record — an `unfixed` one is waiting on nothing but the work')
+    }
+    if (problems.length > 0) {
+      errors.push(`${gapsPath}: the record for '${key}' is malformed — ${problems.join('; ')}`)
       continue
     }
     gaps.set(key, entry)
   }
 }
-const recorded = new Set()
+
+/**
+ * key -> every finding it absorbed.
+ *
+ * A SET WAS NOT ENOUGH, and the reason is the sentence at the top of the gap file. One record
+ * suppresses a finding by `<kind>:<topic>` and nothing else, so when two repositories hold a rule
+ * for the same unregistered topic, ONE entry silences both while its evidence describes one. The
+ * file then reads as an inventory of known issues while quietly omitting some — the exact failure
+ * it exists to prevent. Suppression is not narrowed (the second occurrence is the same defect, and
+ * a red micro-org cannot fix is a red somebody switches off), but every absorbed message is
+ * PRINTED, so the run's report is complete even where the file is not.
+ */
+const recorded = new Map()
 function record(topic, kind, message) {
   const key = `${kind}:${topic}`
   const entry = gaps.get(key)
-  if (entry) {
-    recorded.add(key)
-    notes.push(`recorded ${key} — ${entry.owner} fixes it: ${entry.evidence}`)
+  if (!entry) {
+    errors.push(message)
     return
   }
-  errors.push(message)
+  if (!recorded.has(key)) {
+    recorded.set(key, [])
+    const why =
+      entry.status === 'deferred'
+        ? `deferred until: ${entry.until}`
+        : `unfixed since ${entry.recordedAt} — ${entry.owner} closes it`
+    notes.push(`recorded ${key} [${why}]: ${entry.evidence}`)
+  }
+  recorded.get(key).push(message)
 }
 
 // ---------------------------------------------------------------- 1. registered, emitted by nobody
@@ -449,7 +705,7 @@ for (const [topic, producer] of [...REGISTRY].sort()) {
   record(
     topic,
     'unemitted',
-    `${topic}: registered, and no \`topic:\` in ${producer}/src ever names it. Every consumer classifying it is waiting for a fact that is never sent — identity.user.registered was exactly this, for the whole life of the service.`,
+    `${topic}: registered, and no \`topic:\` in ${producer}/src ever names it. Every consumer classifying it is waiting for a fact that is never sent — identity.user.registered was exactly this, for the whole life of the service. ${orUnderAnotherName(producer, topic)}`,
   )
 }
 
@@ -515,7 +771,7 @@ for (const repo of repos) {
       record(
         member.topic,
         'unproduced',
-        `${member.topic}: ${repo} holds a rule for it at ${member.where}, in a table of registered topics, and ${producer} emits no such thing. A rule for a topic nobody sends reports itself as coverage and can never fire.`,
+        `${member.topic}: ${repo} holds a rule for it at ${member.where}, in a table of registered topics, and ${producer} emits no such thing. A rule for a topic nobody sends reports itself as coverage and can never fire. ${orUnderAnotherName(producer, member.topic)}`,
       )
     }
   }
@@ -592,6 +848,12 @@ for (const repo of repos) {
 }
 
 // ---------------------------------------------------------------- stale records
+for (const [key, absorbed] of recorded) {
+  if (absorbed.length < 2) continue
+  notes.push(
+    `recorded ${key} absorbed ${absorbed.length} findings, and its evidence describes one — all of them: ${absorbed.join(' || ')}`,
+  )
+}
 for (const [key] of gaps) {
   if (recorded.has(key)) continue
   errors.push(

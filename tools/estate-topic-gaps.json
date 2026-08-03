@@ -1,66 +1,81 @@
 {
   "$comment": [
-    "Findings from the FIRST estate-wide run of tools/estate-topics.mjs, each with the evidence and",
-    "the repository that can repair it. Nine of them; none is fixable in micro-org, and every one was",
-    "invisible to the CI of the repository that holds it, because it is a disagreement between two.",
+    "Findings from the estate-wide run of tools/estate-topics.mjs, each with the evidence, the",
+    "repository that can repair it, and WHY IT IS STILL HERE. None is fixable in micro-org, and every",
+    "one was invisible to the CI of the repository that holds it, because it is a disagreement between",
+    "two.",
     "",
     "THIS IS NOT AN EXEMPTION LIST, and the difference is mechanical rather than a promise:",
     "  * an entry whose finding has been repaired FAILS the step — 'the record no longer describes",
     "    the estate, delete it' — so the file empties itself instead of rotting;",
     "  * a finding with no entry FAILS the step. Every instance that lands from today is red on the",
     "    day it lands. The ratchet is the point.",
-    "It is the UNPRODUCED_NOTIFICATIONS pattern (notify/src/topics.ts:106) applied where it has to",
-    "live: the only checkout that can see both halves. The alternative was a job that is red from its",
-    "first run for nine defects micro-org cannot fix, and beacon/src/estate.ts:15 records what happens",
-    "to a gate like that — 'a declared-but-skipping critical journey would refuse every release for",
-    "ever', and then somebody switches it off.",
+    "It is the UNPRODUCED_NOTIFICATIONS pattern (notify/src/topics.ts) applied where it has to live:",
+    "the only checkout that can see both halves. The alternative was a job that is red from its first",
+    "run for defects micro-org cannot fix, and beacon/src/estate.ts:15 records what happens to a gate",
+    "like that — 'a declared-but-skipping critical journey would refuse every release for ever', and",
+    "then somebody switches it off.",
     "",
-    "Keys are '<kind>:<topic>'. `owner` is the repository whose change closes it."
+    "WHAT THE FIRST NINE TAUGHT THIS FILE, ALL OF IT WITHIN A DAY OF WRITING THEM:",
+    "",
+    "  1. `status` IS NEW, AND IT IS THE FIELD THAT WAS MISSING. All nine were written as 'found, and",
+    "     somebody else must fix it'. Two were not that at all — settlement.outbound.failed and",
+    "     market.offer.made are DECISIONS taken in micro-notify, which refuses to key a rule to an",
+    "     envelope naming nobody it could address (`blockedBy: 'no-subject'`), and each needs one",
+    "     field from the producer first. Recorded as omissions they read as neglect; recorded as",
+    "     deferrals with an `until`, they read as what they are and they end when the condition does.",
+    "     notify learned exactly this about its own records one file earlier. `deferred` requires",
+    "     `until`, because a deferral with no end condition is an exemption with better manners.",
+    "",
+    "  2. EVIDENCE CAN BE WRONG, AND WAS. The record for custody.key.exported said custody's export",
+    "     path 'completes in silence'. It did not: custody/src/exports.ts:422 was emitting",
+    "     `custody.export.completed` — a name in no registry with no subscriber anywhere — while",
+    "     `custody.key.exported` was named in seven places across five repositories including a",
+    "     CRITICAL notify rule. Read as written the record pointed at 'add an emit'; the repair was a",
+    "     rename in ONE repository. 'Nobody emits this' and 'somebody emits it under a name nobody",
+    "     knows' are two findings with two repairs, and the checker now says which — it derives the",
+    "     producer's unregistered emits and names them in the verdict, so nobody writes that evidence",
+    "     wrongly again. Prose is not checkable; that is why as much of it as possible was moved into",
+    "     something the checker derives.",
+    "",
+    "  3. RECORDS GO STALE IN HOURS, NOT MONTHS. Five of the nine were repaired the same night they",
+    "     were written. The self-emptying property is not a nicety here, it is the normal case.",
+    "",
+    "  4. ONE RECORD CAN ABSORB MORE THAN ONE FINDING — suppression is by `<kind>:<topic>` alone, so",
+    "     two repositories holding a rule for one unregistered topic are silenced by one entry whose",
+    "     evidence describes one of them. Not narrowed (the second occurrence is the same defect, and",
+    "     a red micro-org cannot fix is a red somebody switches off), but the run PRINTS every",
+    "     absorbed finding, so the report is complete even where this file is not.",
+    "",
+    "Keys are '<kind>:<topic>' with kind from the closed set the checker can produce — unemitted,",
+    "unregistered, unproduced, stale-record. `owner` is the repository whose change closes it, and",
+    "must name a repository in the checkout."
   ],
   "gaps": {
-    "unemitted:custody.key.exported": {
-      "owner": "micro-custody",
-      "evidence": "The registry names it (contracts/packages/events/src/index.ts, producer 'custody') and three consumers classify it — notify/src/catalogue.ts:334, activity/src/classify.ts:641, analytics/src/catalogue.ts:320. The string 'custody.key.exported' appears NOWHERE in micro-custody, not at a `topic:` and not in an outbox insert; custody's export path emits nothing at all (custody/src/exports.ts:422 completes an export in silence). Every consumer is waiting for a fact no code sends, which is identity.user.registered exactly. Repair: emit it where the export completes, or delete the registration and the three rules.",
-      "recordedAt": "2026-08-03"
-    },
     "unemitted:ledger.reconciliation.completed": {
       "owner": "micro-ledger",
-      "evidence": "Registered with producer 'ledger', classified by activity/src/classify.ts:308 and analytics/src/catalogue.ts:312, and the literal appears nowhere in ledger/src — ledger's only emit is 'ledger.entry.posted', written straight into the outbox table at ledger/src/entries.ts:426. A reconciliation that completes announces it to nobody, so the operator surfaces that ask 'did last night's reconciliation finish' are reading a topic that has never carried a message.",
+      "status": "unfixed",
+      "evidence": "Registered with producer 'ledger', classified by activity/src/classify.ts:308 and analytics/src/catalogue.ts:312, and the literal appears nowhere in ledger/src — ledger's only emit is 'ledger.entry.posted', written straight into the outbox table at ledger/src/entries.ts:426. A reconciliation that completes announces it to nobody, so the operator surfaces that ask 'did last night's reconciliation finish' are reading a topic that has never carried a message. ledger emits nothing else unregistered, so this is a missing emit and not a rename.",
       "recordedAt": "2026-08-03"
     },
     "unemitted:mint.deploy.confirmed": {
       "owner": "micro-mint",
-      "evidence": "Registered with producer 'mint' and consumed by notify/src/catalogue.ts:490, activity/src/classify.ts:648 and analytics/src/catalogue.ts:321. mint emits five topics, all of them unregistered — mint.token.created/paid/broadcast/deployed/failed, mint/src/tokens.ts:283 onward — and 'mint.deploy.confirmed' is not among them. The fact the estate agreed to send is the one name mint does not use, so the deployment notification cannot fire while five real events go unclassified.",
-      "recordedAt": "2026-08-03"
-    },
-    "unemitted:settlement.withdrawal.stuck": {
-      "owner": "micro-settlement",
-      "evidence": "Registered with producer 'settlement' and classified by activity/src/classify.ts:383. settlement emits settlement.outbound.stuck instead (settlement/src/withdrawals.ts:500) — the same fact under a different name, unregistered. notify already wrote this disagreement down at notify/src/topics.ts:126: 'None of the three is registered; the registry names settlement.withdrawal.stuck, which settlement does not emit.' The repair is one registration plus one rename, in that order.",
+      "status": "unfixed",
+      "evidence": "Registered with producer 'mint' and consumed by notify/src/catalogue.ts:490, activity/src/classify.ts:648 and analytics/src/catalogue.ts:321. mint emits five topics, all of them unregistered — mint.token.created/paid/broadcast/deployed/failed, mint/src/tokens.ts:283 onward — and 'mint.deploy.confirmed' is not among them. This is the custody shape rather than the ledger one: mint.token.deployed is very probably this fact under a name nobody else knows, so the first move is to compare the two payloads, not to write a sixth emit.",
       "recordedAt": "2026-08-03"
     },
     "stale-record:settlement.outbound.failed": {
-      "owner": "micro-notify",
-      "evidence": "notify/src/topics.ts:124 records 'withdrawal transaction failed outright' as a notification with no producer. settlement emits settlement.outbound.failed at settlement/src/withdrawals.ts:482 today. notify's own staleGaps() asks only whether the registry NAMES the topic, and it does not, so the record looks live from inside notify and is dead from outside it. Repair: register the topic contracts-side and turn the record back into a rule.",
-      "recordedAt": "2026-08-03"
-    },
-    "stale-record:trade.bot.paused": {
-      "owner": "micro-notify",
-      "evidence": "notify/src/topics.ts:138 records 'trading bot stopped' as unproduced, citing trade/src/bots.ts:614 — and that line is an emit: trade puts trade.bot.paused on the bus, and micro-trade has quarantined it in its own AWAITING_REGISTRATION. The producer exists, the consumer wants it, and only the registration is missing; the record says the notification is impossible when it is one contracts entry away.",
+      "owner": "micro-settlement",
+      "status": "deferred",
+      "until": "settlement emits a user-facing withdrawal-failure topic carrying userId, as it already did for the stuck twin (settlement/src/withdrawals.ts:532). Then notify writes the rule and this record and notify's own both go.",
+      "evidence": "notify records at notify/src/topics.ts that 'withdrawal transaction failed outright' has no rule, while settlement emits settlement.outbound.failed at settlement/src/withdrawals.ts:482 — so from here the record looks stale. It is not, and micro-notify has since said why: that topic is WALLET's narrow handover (settlement/src/outbox.ts:49-55), keyed by the withdrawal id, with no userId in the payload and no actor set, so a rule on it answers no_recipient for ever. notify's record now carries blockedBy 'no-subject' and names micro-settlement as the owner. Deferred rather than unfixed because the decision not to write the rule is correct today and stops being correct the moment the condition above is met.",
       "recordedAt": "2026-08-03"
     },
     "stale-record:market.offer.made": {
-      "owner": "micro-notify",
-      "evidence": "notify/src/topics.ts:145 records 'marketplace offer received' as unproduced and names market.offer.made as what the producer really sends. market emits it at market/src/bids.ts:432 and has quarantined it in its own topics.ts. Same shape as the settlement entry: the two repositories already agree on the name and nothing connects them, because the fact is on the bus and in no registry.",
-      "recordedAt": "2026-08-03"
-    },
-    "stale-record:devplatform.key.issued": {
-      "owner": "micro-notify",
-      "evidence": "notify/src/topics.ts:159 records 'API key created' as unproduced. devplatform emits devplatform.key.issued at devplatform/src/apikeys.ts:274 and quarantines it in its own topics.ts. 'An API key acts as the user' is the reason notify gave for the rule, and the rule is still deleted while the event it needed is being published under the name notify itself wrote down.",
-      "recordedAt": "2026-08-03"
-    },
-    "stale-record:devplatform.key.revoked": {
-      "owner": "micro-notify",
-      "evidence": "notify/src/topics.ts:166 records 'API key revoked' as unproduced. devplatform emits devplatform.key.revoked at devplatform/src/apikeys.ts:359, quarantined in its own topics.ts. 'A revocation the owner did not make' is a live security notification with a producer, a consumer that has written down the exact name, and no registration joining them.",
+      "owner": "micro-market",
+      "status": "deferred",
+      "until": "market's OFFER_MADE payload carries the seller subject. `listing.sellerSubject` is already read three lines above the emit (market/src/bids.ts:399, to refuse shill bidding) and simply is not put on the event.",
+      "evidence": "notify records at notify/src/topics.ts that 'marketplace offer received' has no rule, while market emits market.offer.made at market/src/bids.ts:432 — so from here the record looks stale. micro-notify has since said why it is not: the payload is { listingId, offerId, offererSubject, amount, assetCode } with the OFFERER as actor, and the notification this requirement asks for goes to the SELLER, who is not on the envelope. Notifying the offerer that they made an offer is noise plus a false claim of coverage. notify's record carries blockedBy 'no-subject' and names micro-market. One field on market's payload closes it.",
       "recordedAt": "2026-08-03"
     }
   }
