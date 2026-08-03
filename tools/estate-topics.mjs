@@ -43,6 +43,22 @@
 // member resolution the emit sites get. estate-ci.yml plants all three shapes on every run and
 // fails unless each is named.
 //
+// AND THE SAME DEFECT WAS IN THE RAW-INSERT PATH, WHICH IS THE THIRD TIME IN THIS FILE.
+//
+// `outboxWrites` exists because ledger writes its most-consumed topic straight into the outbox
+// table in SQL, with no `topic:` property anywhere near it. It was written to read a LITERAL in the
+// topic column, and `ledger/src/entries.ts:441` now writes
+//
+//     values (${ENTRY_POSTED}, …)
+//
+// — the constant declared at `entries.ts:199`, for the express reason that a name is reachable from
+// `topics.ts` and an inlined string is not. The `topic:` path has resolved identifiers and members
+// since its first run. This one bailed on anything starting `${`, so the emit vanished and direction
+// 1 reported "no `topic:` in ledger/src ever names it… the repair is an emit, not a rename" about a
+// service that emits it. ONE TOOL DISAGREEING WITH ITSELF ABOUT WHAT AN EMIT IS. Both paths now go
+// through `resolveTopicExpr`, so there is one answer to that question and teaching it a shape
+// teaches both. What else that path could not see is listed at `outboxWrites`.
+//
 // The asymmetry that remains is written down at `tablesOf`: the consumer tables of direction 3 are
 // still a heuristic over literals, because their quorum is calibrated against fifty-six
 // repositories and the named structures are not.
@@ -265,8 +281,10 @@ function resolveIdentifier(repo, ident) {
 
 function resolveIdentifierUncached(repo, ident) {
   for (const file of sources.get(repo) ?? []) {
-    const decl = new RegExp(`\\b(?:const|let|var)\\s+${ident}\\s*(?::[^=\\n]{0,80})?=\\s*'([a-z0-9_.]+)'`).exec(file.text)
-    if (decl) return decl[1]
+    const decl = new RegExp(
+      `\\b(?:const|let|var)\\s+${ident}\\s*(?::[^=\\n]{0,80})?=\\s*(['"\`])([a-z0-9_.]+)\\1`,
+    ).exec(file.text)
+    if (decl) return decl[2]
   }
   return null
 }
@@ -298,10 +316,75 @@ function resolveMemberUncached(repo, object, member) {
       end++
     }
     const body = file.text.slice(from, end)
-    const hit = new RegExp(`\\b${member}\\s*:\\s*'([a-z0-9_.]+)'`).exec(body)
-    if (hit) return hit[1]
+    const hit = new RegExp(`\\b${member}\\s*:\\s*(['"\`])([a-z0-9_.]+)\\1`).exec(body)
+    if (hit) return hit[2]
   }
   return null
+}
+
+/**
+ * ONE ANSWER TO "WHAT TOPIC DOES THIS EXPRESSION NAME", for every path in this file that asks.
+ *
+ * It used to be two answers. The `topic:` path resolved a single-quoted literal, then an identifier,
+ * then a member; the raw-insert path resolved a single-quoted literal and gave up on everything
+ * else — which is how `values (${ENTRY_POSTED}, …)` became invisible and ledger read as emitting
+ * nothing. A checker that cannot agree with itself about what an emit is will keep growing halves
+ * that disagree, so this is the only place that decides.
+ *
+ * Returns the normalised expression alongside the topic, because the callers' remaining questions —
+ * is this a type annotation, is this a relay forwarding what it was handed — are asked of the
+ * expression after the casts and the substitution wrapper come off, not before.
+ */
+const QUOTED_TOPIC = /^(['"`])([a-z0-9_.]+)\1$/
+
+/** `x as string`, `x::text`, `x::text[]` — the type system, or the database, talking to itself. */
+function stripCasts(expr) {
+  let out = expr.trim()
+  for (;;) {
+    const next = out
+      .replace(/\s+as\s+(?:const|[\w.<>[\]|\s]+)$/, '')
+      .replace(/::\s*"?[\w.]+"?\s*(?:\[\s*\])?$/, '')
+      .trim()
+    if (next === out) return out
+    out = next
+  }
+}
+
+/**
+ * `${…}` around the WHOLE expression, or null.
+ *
+ * In a tagged SQL template the substitution *is* the value in that column, so `${ENTRY_POSTED}` and
+ * `ENTRY_POSTED` are the same claim about the row. Only unwrapped when the braces balance and the
+ * closing one ends the expression: `${a} || ${b}` is a concatenation, not a name, and must stay
+ * unresolvable rather than silently become `a} || ${b`.
+ */
+function unwrapSubstitution(expr) {
+  if (!expr.startsWith('${') || !expr.endsWith('}')) return null
+  let depth = 0
+  for (let i = 1; i < expr.length; i++) {
+    if (expr[i] === '{') depth++
+    else if (expr[i] === '}') {
+      depth--
+      if (depth === 0) return i === expr.length - 1 ? expr.slice(2, i).trim() : null
+    }
+  }
+  return null
+}
+
+function resolveTopicExpr(repo, raw) {
+  let expr = stripCasts(String(raw ?? ''))
+  const inner = unwrapSubstitution(expr)
+  if (inner !== null) expr = stripCasts(inner)
+  if (expr === '') return { topic: null, expr }
+  // All three of JavaScript's quote styles. The scan this replaced saw one of them, and direction 4
+  // learned in the same file what that costs. A template literal carrying a substitution cannot
+  // match the character class, which is the right answer: `${x}.bot.paused` is a shape, not a name.
+  const literal = QUOTED_TOPIC.exec(expr)
+  if (literal) return { topic: literal[2], expr }
+  if (/^[A-Za-z_$][\w$]*$/.test(expr)) return { topic: resolveIdentifier(repo, expr), expr }
+  const member = expr.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/)
+  if (member) return { topic: resolveMember(repo, member[1], member[2]), expr }
+  return { topic: null, expr }
 }
 
 /** topic -> [{ where, file, offset }], for every topic this repository actually puts on the bus. */
@@ -312,17 +395,10 @@ function emitsOf(repo) {
       if (file.inString[m.index] === 1) continue
       const at = m.index + m[0].length
       // `envelope.topic as string` is the same expression as `envelope.topic`; the cast is TypeScript
-      // talking to itself.
-      const expr = valueAfter(file.text, at).replace(/\s+as\s+[\w.<>[\]|\s]+$/, '')
+      // talking to itself, and `resolveTopicExpr` takes it off.
+      const { topic, expr } = resolveTopicExpr(repo, valueAfter(file.text, at))
       const where = `${file.path}:${lineOf(file.text, m.index)}`
       if (expr === '' || TYPE_POSITION.test(expr)) continue
-      const literal = expr.match(/^'([a-z0-9_.]+)'$/)
-      let topic = literal ? literal[1] : null
-      if (!topic && /^[A-Za-z_$][\w$]*$/.test(expr)) topic = resolveIdentifier(repo, expr)
-      if (!topic) {
-        const member = expr.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/)
-        if (member) topic = resolveMember(repo, member[1], member[2])
-      }
       if (!topic) {
         if (RUNTIME_TOPIC.test(expr)) continue // a relay forwards a topic it was handed
         errors.push(
@@ -340,49 +416,183 @@ function emitsOf(repo) {
 
     // ── the second emit shape, and the reason this is a derivation rather than a grep ──
     //
-    // `ledger/src/entries.ts:426` puts `'ledger.entry.posted'` on the bus by writing the outbox row
+    // `ledger/src/entries.ts:439` puts `ledger.entry.posted` on the bus by writing the outbox row
     // itself, in SQL, inside a tagged template. There is no `topic:` anywhere near it. A checker
     // that knew only the first shape reported ledger's most-consumed topic as produced by nobody —
     // which is what the first run of this file did, and it is the same lesson conformance's
     // ledgeraccounts.ts records about account literals being spelled three ways.
-    for (const m of file.text.matchAll(/insert\s+into\s+outbox\s*\(([^)]*)\)\s*values\s*\(/gi)) {
-      const columns = m[1].split(',').map((c) => c.trim().toLowerCase())
-      const at = columns.indexOf('topic')
-      if (at < 0) continue
-      const values = splitTopLevel(file.text, m.index + m[0].length - 1)
-      const expr = (values[at] ?? '').trim()
-      const where = `${file.path}:${lineOf(file.text, m.index)}`
-      const literal = expr.match(/^'([a-z0-9_.]+)'$/)
-      if (!literal) {
+    for (const write of outboxWrites(file.text)) {
+      const where = `${file.path}:${lineOf(file.text, write.at)}`
+      if (write.error) {
+        errors.push(`${where}: ${write.error}`)
+        continue
+      }
+      const { topic, expr } = resolveTopicExpr(repo, write.expr)
+      if (!topic) {
         // `${event.topic}` — the outbox helper every service shares, writing whatever it was handed.
-        if (/^\$\{/.test(expr)) continue
+        // The same judgement as RUNTIME_TOPIC at a `topic:` property, made by the same test rather
+        // than by a bail on `${`, which could not tell a relay from a constant.
+        if (RUNTIME_TOPIC.test(expr)) continue
         errors.push(
           `${where}: writes an outbox row whose topic column is \`${expr || '(nothing this checker could read)'}\`, which cannot be resolved to a name — fail, do not guess`,
         )
         continue
       }
-      if (!out.has(literal[1])) out.set(literal[1], [])
-      out.get(literal[1]).push({ where, file: file.path, offset: m.index })
+      // Asked here for the same reason it is asked of a `topic:` property, and it was not: a raw
+      // insert of 'foo.bar' used to be silently admitted to the emitted set as a topic no registry
+      // could ever name.
+      if (!TOPIC_SHAPE.test(topic)) {
+        errors.push(
+          `${where}: writes an outbox row for '${topic}', which is not a legal topic name (contracts-events TOPIC_PATTERN)`,
+        )
+        continue
+      }
+      if (!out.has(topic)) out.set(topic, [])
+      out.get(topic).push({ where, file: file.path, offset: write.at })
     }
   }
   return out
 }
 
-/** The comma-separated members of a parenthesised list starting at `openParen`. */
-function splitTopLevel(text, openParen) {
+/**
+ * Every outbox row written in SQL in one file: `{ at, expr }` per row, or `{ at, error }`.
+ *
+ * WHAT THIS PATH COULD NOT SEE, none of it loudly:
+ *
+ *   * A CONSTANT IN THE TOPIC COLUMN. `values (${ENTRY_POSTED}, …)`. It bailed on anything opening
+ *     `${`, a rule written for the shared pump's `${event.topic}` and far too wide: the estate's
+ *     most-consumed topic disappeared the day ledger named it rather than inlining it, and
+ *     direction 1 said "the repair is an emit, not a rename" about a service that emits it. The
+ *     relay is now identified by RUNTIME_TOPIC — the test the `topic:` path already used for the
+ *     same judgement — so a name resolves and a shape is skipped.
+ *   * ANY QUOTE BUT ONE. `values ("x.y.z", …)` was an error, not a topic. Direction 4 taught this
+ *     file the same lesson one function away.
+ *   * A SECOND ROW. `values (…), (…)` — only the first was read, in silence.
+ *   * A QUALIFIED OR QUOTED TABLE. `insert into public.outbox`, `insert into "outbox"` matched
+ *     nothing at all, and a service that adds a schema prefix stops emitting as far as this file is
+ *     concerned.
+ *   * A COMMA INSIDE A VALUE. `splitTopLevel` knew brackets but not strings, so one quoted comma
+ *     shifted every column after it and the topic was read off some other column — a MISREAD rather
+ *     than a miss, which is the worse of the two.
+ *   * AN INSERT WITH NO `values (…)` TO READ. `insert into outbox (…) select …`, or a positional
+ *     insert with no column list at all. Both are errors now: every verdict in this file says
+ *     "nobody emits this", and that sentence is only true of a complete set.
+ *   * AN ILLEGAL NAME. See TOPIC_SHAPE at the caller.
+ *
+ * THE HOLE THAT IS LEFT, deliberately. A bare `insert into outbox` with neither a column list nor a
+ * `values (`, is skipped rather than reported, because `notify/src/topics.ts:231` says in a STRING
+ * that "policy has no outbox at all — no outbox.ts, no `insert into outbox` anywhere in policy/src".
+ * `inString` cannot separate that from real SQL: the real SQL is a tagged template, so every
+ * character of it is inside a string too. Six guards in this estate have fired on their own prose,
+ * so the structure — a column list, or `values` — is what makes a match code rather than a sentence.
+ */
+function outboxWrites(text) {
   const out = []
+  const TABLE = /\binsert\s+into\s+(?:"?[A-Za-z_]\w*"?\s*\.\s*)?"?outbox"?(?![\w"])/gi
+  for (const m of text.matchAll(TABLE)) {
+    let i = m.index + m[0].length
+    const skipSpace = () => {
+      while (i < text.length && /\s/.test(text[i])) i++
+    }
+    skipSpace()
+    let columns = null
+    if (text[i] === '(') {
+      const close = text.indexOf(')', i)
+      if (close === -1) continue // not a column list, and not anything else either
+      columns = text
+        .slice(i + 1, close)
+        .split(',')
+        .map((c) => c.trim().toLowerCase().replace(/^"|"$/g, ''))
+      i = close + 1
+      skipSpace()
+    }
+    const isValues = /^values\b/i.test(text.slice(i, i + 7))
+    // Neither a column list nor `values` — prose. See THE HOLE THAT IS LEFT above.
+    if (columns === null && !isValues) continue
+    if (!isValues) {
+      out.push({
+        at: m.index,
+        error: `writes to the outbox with something other than \`values (…)\` — this checker cannot read which topic that row carries, and it will not guess one`,
+      })
+      continue
+    }
+    i += 6
+    skipSpace()
+    if (text[i] !== '(') {
+      out.push({ at: m.index, error: 'writes an outbox `values` with no row after it — fail, do not guess' })
+      continue
+    }
+    if (columns === null) {
+      out.push({
+        at: m.index,
+        error:
+          'writes an outbox row positionally, naming no columns, so which value carries the topic is a guess — name the columns',
+      })
+      continue
+    }
+    const col = columns.indexOf('topic')
+    if (col < 0) {
+      out.push({
+        at: m.index,
+        error: `writes an outbox row into (${columns.join(', ')}) and none of those columns is \`topic\` — an event with no name is not on the bus`,
+      })
+      continue
+    }
+    // Every row of a multi-row insert. Reading only the first is the same silence as reading only
+    // one quote style: the second event is emitted and this file says nobody sends it.
+    for (;;) {
+      const row = splitTopLevel(text, i)
+      out.push({ at: m.index, expr: row.values[col] ?? '' })
+      let j = row.end + 1
+      while (j < text.length && /\s/.test(text[j])) j++
+      if (text[j] !== ',') break
+      j++
+      while (j < text.length && /\s/.test(text[j])) j++
+      if (text[j] !== '(') break
+      i = j
+    }
+  }
+  return out
+}
+
+/**
+ * The comma-separated members of a parenthesised list starting at `openParen`, and where it closed.
+ *
+ * STRING-AWARE, because it was not, and that failure is a misread rather than a miss: a comma or an
+ * unbalanced bracket inside a quoted value shifted every member after it by one, so the topic
+ * column was read off a neighbouring column's expression and reported with total confidence.
+ */
+function splitTopLevel(text, openParen) {
+  const values = []
   let depth = 1
   let current = ''
   let i = openParen + 1
-  while (i < text.length && depth > 0) {
+  while (i < text.length) {
     const c = text[i]
+    if (c === "'" || c === '"' || c === '`') {
+      const quote = c
+      current += c
+      i++
+      while (i < text.length && text[i] !== quote) {
+        if (text[i] === '\\') {
+          current += text.slice(i, i + 2)
+          i += 2
+          continue
+        }
+        current += text[i]
+        i++
+      }
+      current += text[i] ?? ''
+      i++
+      continue
+    }
     if (c === '(' || c === '{' || c === '[') depth++
     else if (c === ')' || c === '}' || c === ']') {
       depth--
       if (depth === 0) break
     }
     if (c === ',' && depth === 1) {
-      out.push(current.trim())
+      values.push(current.trim())
       current = ''
       i++
       continue
@@ -390,8 +600,8 @@ function splitTopLevel(text, openParen) {
     current += c
     i++
   }
-  out.push(current.trim())
-  return out
+  values.push(current.trim())
+  return { values, end: i }
 }
 
 const EMITS = new Map(repos.map((repo) => [repo, sources.has(repo) ? emitsOf(repo) : new Map()]))

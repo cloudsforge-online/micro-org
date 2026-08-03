@@ -51,18 +51,30 @@
     "unregistered, unproduced, stale-record. `owner` is the repository whose change closes it, and",
     "must name a repository in the checkout."
   ],
-  "gaps": {
-    "unemitted:ledger.reconciliation.completed": {
-      "owner": "micro-ledger",
-      "status": "unfixed",
-      "evidence": "Registered with producer 'ledger', classified by activity/src/classify.ts:308 and analytics/src/catalogue.ts:312, and the literal appears nowhere in ledger/src — ledger's only emit is 'ledger.entry.posted', written straight into the outbox table at ledger/src/entries.ts:426. A reconciliation that completes announces it to nobody, so the operator surfaces that ask 'did last night's reconciliation finish' are reading a topic that has never carried a message. ledger emits nothing else unregistered, so this is a missing emit and not a rename.",
-      "recordedAt": "2026-08-03"
-    },
-    "unemitted:mint.deploy.confirmed": {
-      "owner": "micro-mint",
-      "status": "unfixed",
-      "evidence": "Registered with producer 'mint' and consumed by notify/src/catalogue.ts:490, activity/src/classify.ts:648 and analytics/src/catalogue.ts:321. mint emits five topics, all of them unregistered — mint.token.created/paid/broadcast/deployed/failed, mint/src/tokens.ts:283 onward — and 'mint.deploy.confirmed' is not among them. This is the custody shape rather than the ledger one: mint.token.deployed is very probably this fact under a name nobody else knows, so the first move is to compare the two payloads, not to write a sixth emit.",
-      "recordedAt": "2026-08-03"
-    }
-  }
+  "$closed": [
+    "EMPTY IS THE INTENDED STATE, not an unfinished one. Eleven records have been written into this",
+    "file and eleven have been deleted by the estate catching up with them, most within a day. Two",
+    "went on 2026-08-03, and they are worth naming because the checker cannot tell the two apart —",
+    "'the gap is closed, or it has changed shape' — and they were closed in the two different ways",
+    "the file argues about at note 2 above:",
+    "",
+    "  * `unemitted:ledger.reconciliation.completed` was a MISSING EMIT, and its evidence said so.",
+    "    micro-ledger wrote one: `RECONCILIATION_COMPLETED` at ledger/src/reconcile.ts:121, emitted",
+    "    at reconcile.ts:331 keyed `chain:network` as the registry requires, reached from",
+    "    ledger/src/jobs.ts:222 inside `recurringJobs` — so it satisfies direction 5 as well as",
+    "    direction 1, which a registered-and-named-but-uncalled emitter would not.",
+    "",
+    "  * `unemitted:mint.deploy.confirmed` was a RENAME, and its evidence predicted that: 'this is",
+    "    the custody shape rather than the ledger one, mint.token.deployed is very probably this",
+    "    fact under a name nobody else knows'. mint/src/tokens.ts:312 now declares",
+    "    `DEPLOYED_TOPIC = 'mint.deploy.confirmed'` where it declared the other name, emitted at",
+    "    tokens.ts:690, and no `mint.token.deployed` survives outside the comments explaining the",
+    "    change. One repository, no new registrations, no new rules — which is exactly the saving",
+    "    the custody lesson was written down to secure.",
+    "",
+    "Both were verified against the two repositories' source before deletion rather than against the",
+    "exit code, because 'closed' and 'changed shape' produce the same red and only one of them means",
+    "the record should go."
+  ],
+  "gaps": {}
 }
