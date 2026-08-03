@@ -479,6 +479,85 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
     assert.match(yaml, /gh issue create --repo "\$REPO" --label estate-invariant/)
     assert.match(yaml, /gh issue close "\$open"/, 'and it must close again, or the label becomes noise')
   })
+
+  /* ---- the two invariants added after the ledger sweep, held to the same rules ---- */
+
+  it('every verdict is reached, even when an earlier one failed', () => {
+    // Three unrelated questions share this checkout only because cloning it three times would be
+    // absurd. Stopping at the first failure turns "the estate is wrong in three ways" into three
+    // nights, and lets a broken sweep hide a real disagreement behind it.
+    for (const step of [
+      '- name: The estate agrees on every ledger account type',
+      '- name: Every registered scope is demanded by a gate',
+      '- name: The registry, the producers and the consumers agree about the bus',
+    ]) {
+      const at = yaml.indexOf(step)
+      assert.notEqual(at, -1, `${step} must exist`)
+      assert.match(yaml.slice(at, at + 200), /if: always\(\)/, `${step} must run regardless of the steps before it`)
+    }
+  })
+
+  it('each new invariant carries its own canary, graded on what the red names', () => {
+    // Same rule as the ledger canary: a partial checkout, an unreadable registry and a missing node
+    // all exit non-zero. A canary that accepts any red accepts every way a step stops measuring.
+    assert.match(yaml, /the sweep stayed GREEN with a dead scope registered AND a dead scope demanded/)
+    assert.match(yaml, /grep -q 'canary:orphan' "\$\{RUNNER_TEMP\}\/scope-canary\.txt"/)
+    assert.match(yaml, /grep -q '__estate_ci_scope_canary\.ts' "\$\{RUNNER_TEMP\}\/scope-canary\.txt"/)
+    assert.match(yaml, /the sweep stayed GREEN with an unemitted registered topic AND a dead emitter/)
+    assert.match(yaml, /grep -q 'canary\.estate\.injected' "\$\{RUNNER_TEMP\}\/topic-canary\.txt"/)
+    assert.match(yaml, /grep -q 'emitEstateCiCanary' "\$\{RUNNER_TEMP\}\/topic-canary\.txt"/)
+    // …and both must prove the injection was written, and then proven gone.
+    assert.match(yaml, /the injections were not written/)
+    assert.match(yaml, /an injection survived/)
+  })
+
+  it('the scope union is built by service-ci.yml own derivation, not a copy of it', () => {
+    // Three earlier audit sweeps each missed a different demand shape. A second implementation would
+    // drift, and the drift is invisible: every verdict of this step is "NOTHING demands this scope",
+    // which is exactly what a derivation that stopped seeing a shape produces.
+    assert.match(yaml, /SCOPE_AUDIT_SCRIPT/, 'the script must be extracted from service-ci.yml')
+    assert.match(yaml, /the heredoc markers .* have moved or been renamed/i)
+    // The derivation's own machinery, none of which may be re-typed here. (`.scopes.includes(` is
+    // deliberately not the test: the canary plants exactly that shape as a GATE, which is the point.)
+    for (const identifier of ['addGate(', 'resolveExpr(', 'SCOPE_SHAPE', 'closedSetFor(']) {
+      assert.ok(!yaml.includes(identifier), `${identifier} belongs to service-ci.yml's derivation, not a copy here`)
+    }
+  })
+
+  it('the checkers are the ones under test, not main copies of themselves', () => {
+    // The estate clone already contains micro-org. Running the checkers from THERE would grade a
+    // pull request that changes a checker with main's copy of it — a workflow that cannot test its
+    // own change.
+    assert.match(yaml, /if: github\.repository == 'cloudsforge-online\/micro-org'/)
+    assert.match(yaml, /TOOLS=\$\{GITHUB_WORKSPACE\}\/self/)
+    assert.match(yaml, /tools\/estate-scopes\.mjs/)
+    assert.match(yaml, /tools\/estate-topics\.mjs/)
+    for (const path of ['tools/estate-scopes.mjs', 'tools/estate-topics.mjs', 'tools/estate-topic-gaps.json']) {
+      assert.match(yaml, new RegExp(`- '${path.replace(/[.]/g, '\\.')}'`), `${path} must re-prove the job when it changes`)
+    }
+  })
+})
+
+/**
+ * The recorded gaps are a ratchet, not an exemption list, and the properties that make them one are
+ * mechanical: an owning repository, and evidence long enough to be evidence. The self-emptying half
+ * — a record that outlives its finding fails — is in the checker itself and is exercised by the
+ * canary; this is the half that can rot by hand.
+ */
+test('every recorded estate topic gap names an owner and carries its evidence', () => {
+  const raw = readFileSync(new URL('../tools/estate-topic-gaps.json', import.meta.url), 'utf8')
+  const parsed = JSON.parse(raw) as { gaps: Record<string, { owner?: string; evidence?: string }> }
+  const keys = Object.keys(parsed.gaps)
+  assert.ok(keys.length > 0, 'an empty ledger means the estate reconciles — delete this test then, deliberately')
+  for (const [key, entry] of Object.entries(parsed.gaps)) {
+    assert.match(key, /^[a-z-]+:[a-z0-9_.]+$/, `${key} must be '<kind>:<topic>'`)
+    assert.match(entry.owner ?? '', /^micro-[a-z-]+$/, `${key} must name the repository that can repair it`)
+    assert.ok(
+      (entry.evidence ?? '').length >= 80,
+      `${key}: under eighty characters of evidence is a hole, not a decision`,
+    )
+    assert.match(entry.evidence ?? '', /\.ts:\d+/, `${key}: evidence must cite a file and a line, not a summary`)
+  }
 })
 
 test('no per-repository workflow calls the estate sweep', () => {

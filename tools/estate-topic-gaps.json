@@ -1,0 +1,67 @@
+{
+  "$comment": [
+    "Findings from the FIRST estate-wide run of tools/estate-topics.mjs, each with the evidence and",
+    "the repository that can repair it. Nine of them; none is fixable in micro-org, and every one was",
+    "invisible to the CI of the repository that holds it, because it is a disagreement between two.",
+    "",
+    "THIS IS NOT AN EXEMPTION LIST, and the difference is mechanical rather than a promise:",
+    "  * an entry whose finding has been repaired FAILS the step — 'the record no longer describes",
+    "    the estate, delete it' — so the file empties itself instead of rotting;",
+    "  * a finding with no entry FAILS the step. Every instance that lands from today is red on the",
+    "    day it lands. The ratchet is the point.",
+    "It is the UNPRODUCED_NOTIFICATIONS pattern (notify/src/topics.ts:106) applied where it has to",
+    "live: the only checkout that can see both halves. The alternative was a job that is red from its",
+    "first run for nine defects micro-org cannot fix, and beacon/src/estate.ts:15 records what happens",
+    "to a gate like that — 'a declared-but-skipping critical journey would refuse every release for",
+    "ever', and then somebody switches it off.",
+    "",
+    "Keys are '<kind>:<topic>'. `owner` is the repository whose change closes it."
+  ],
+  "gaps": {
+    "unemitted:custody.key.exported": {
+      "owner": "micro-custody",
+      "evidence": "The registry names it (contracts/packages/events/src/index.ts, producer 'custody') and three consumers classify it — notify/src/catalogue.ts:334, activity/src/classify.ts:641, analytics/src/catalogue.ts:320. The string 'custody.key.exported' appears NOWHERE in micro-custody, not at a `topic:` and not in an outbox insert; custody's export path emits nothing at all (custody/src/exports.ts:422 completes an export in silence). Every consumer is waiting for a fact no code sends, which is identity.user.registered exactly. Repair: emit it where the export completes, or delete the registration and the three rules.",
+      "recordedAt": "2026-08-03"
+    },
+    "unemitted:ledger.reconciliation.completed": {
+      "owner": "micro-ledger",
+      "evidence": "Registered with producer 'ledger', classified by activity/src/classify.ts:308 and analytics/src/catalogue.ts:312, and the literal appears nowhere in ledger/src — ledger's only emit is 'ledger.entry.posted', written straight into the outbox table at ledger/src/entries.ts:426. A reconciliation that completes announces it to nobody, so the operator surfaces that ask 'did last night's reconciliation finish' are reading a topic that has never carried a message.",
+      "recordedAt": "2026-08-03"
+    },
+    "unemitted:mint.deploy.confirmed": {
+      "owner": "micro-mint",
+      "evidence": "Registered with producer 'mint' and consumed by notify/src/catalogue.ts:490, activity/src/classify.ts:648 and analytics/src/catalogue.ts:321. mint emits five topics, all of them unregistered — mint.token.created/paid/broadcast/deployed/failed, mint/src/tokens.ts:283 onward — and 'mint.deploy.confirmed' is not among them. The fact the estate agreed to send is the one name mint does not use, so the deployment notification cannot fire while five real events go unclassified.",
+      "recordedAt": "2026-08-03"
+    },
+    "unemitted:settlement.withdrawal.stuck": {
+      "owner": "micro-settlement",
+      "evidence": "Registered with producer 'settlement' and classified by activity/src/classify.ts:383. settlement emits settlement.outbound.stuck instead (settlement/src/withdrawals.ts:500) — the same fact under a different name, unregistered. notify already wrote this disagreement down at notify/src/topics.ts:126: 'None of the three is registered; the registry names settlement.withdrawal.stuck, which settlement does not emit.' The repair is one registration plus one rename, in that order.",
+      "recordedAt": "2026-08-03"
+    },
+    "stale-record:settlement.outbound.failed": {
+      "owner": "micro-notify",
+      "evidence": "notify/src/topics.ts:124 records 'withdrawal transaction failed outright' as a notification with no producer. settlement emits settlement.outbound.failed at settlement/src/withdrawals.ts:482 today. notify's own staleGaps() asks only whether the registry NAMES the topic, and it does not, so the record looks live from inside notify and is dead from outside it. Repair: register the topic contracts-side and turn the record back into a rule.",
+      "recordedAt": "2026-08-03"
+    },
+    "stale-record:trade.bot.paused": {
+      "owner": "micro-notify",
+      "evidence": "notify/src/topics.ts:138 records 'trading bot stopped' as unproduced, citing trade/src/bots.ts:614 — and that line is an emit: trade puts trade.bot.paused on the bus, and micro-trade has quarantined it in its own AWAITING_REGISTRATION. The producer exists, the consumer wants it, and only the registration is missing; the record says the notification is impossible when it is one contracts entry away.",
+      "recordedAt": "2026-08-03"
+    },
+    "stale-record:market.offer.made": {
+      "owner": "micro-notify",
+      "evidence": "notify/src/topics.ts:145 records 'marketplace offer received' as unproduced and names market.offer.made as what the producer really sends. market emits it at market/src/bids.ts:432 and has quarantined it in its own topics.ts. Same shape as the settlement entry: the two repositories already agree on the name and nothing connects them, because the fact is on the bus and in no registry.",
+      "recordedAt": "2026-08-03"
+    },
+    "stale-record:devplatform.key.issued": {
+      "owner": "micro-notify",
+      "evidence": "notify/src/topics.ts:159 records 'API key created' as unproduced. devplatform emits devplatform.key.issued at devplatform/src/apikeys.ts:274 and quarantines it in its own topics.ts. 'An API key acts as the user' is the reason notify gave for the rule, and the rule is still deleted while the event it needed is being published under the name notify itself wrote down.",
+      "recordedAt": "2026-08-03"
+    },
+    "stale-record:devplatform.key.revoked": {
+      "owner": "micro-notify",
+      "evidence": "notify/src/topics.ts:166 records 'API key revoked' as unproduced. devplatform emits devplatform.key.revoked at devplatform/src/apikeys.ts:359, quarantined in its own topics.ts. 'A revocation the owner did not make' is a live security notification with a producer, a consumer that has written down the exact name, and no registration joining them.",
+      "recordedAt": "2026-08-03"
+    }
+  }
+}

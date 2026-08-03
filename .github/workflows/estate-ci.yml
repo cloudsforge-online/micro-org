@@ -97,13 +97,63 @@ name: estate-ci
 #     injection is asserted written before and asserted deleted after.
 #
 # ──────────────────────────────────────────────────────────────────────────────────────────────────
+# THE OTHER TWO INVARIANTS THIS JOB CARRIES
+#
+# Both were designed into the shape above and are a STEP each, not a new mechanism: the expensive
+# part is having all fifty-five repositories on one disk, and that has already happened by the time
+# the first verdict is read. Each is documented at its own step; in one line each —
+#
+#   2. THE SCOPE REGISTRY IS TOTAL. service-ci.yml proves demands ⊆ registry one repository at a
+#      time. registry ⊆ demands needs the union of every gate in the estate, which no repository has;
+#      contracts says so itself, above `isDeprecatedScope`: "Nothing proves the other direction,
+#      because no checkout sees every gate."
+#   3. THE TOPIC REGISTRY DESCRIBES WHAT SERVICES ACTUALLY SEND. identity's and notify's topics.ts
+#      each reconcile one repository against the registry. The registry is not the estate: a
+#      registered topic no producer emits, and an emitter no code calls, both pass every per-
+#      repository check there is.
+#
+# A FAILURE IN ONE DOES NOT STOP THE OTHERS. Every verdict step is `if: always()`. The three have
+# nothing to do with each other and share a checkout only because cloning it three times would be
+# absurd; stopping at the first would turn "the estate is wrong in three ways" into three nights of
+# work, and would let a broken sweep hide a real disagreement behind it. The canaries are `always()`
+# for the same reason, and a canary failing does not suppress its own verdict: "does the machinery
+# work" and "does the estate agree" are different questions and a run must answer both.
+#
+# ──────────────────────────────────────────────────────────────────────────────────────────────────
 # WHAT THIS STILL CANNOT SEE
 #
-# Everything ledgeraccounts.ts's own header lists — anything not written as a TypeScript object
-# literal, types decided at runtime, the ledger's own already-written rows — plus one thing that is
-# this file's: it sees `main`. A disagreement introduced on a branch is caught when it lands, not
-# when it is proposed. That is the price of mechanism 3 being unavailable, and it is written down
-# here rather than left to be discovered.
+# ALL THREE: it reads `main`. A disagreement introduced on a branch is caught when it lands, not when
+# it is proposed — the price of mechanism 3 being unavailable. And it reads SOURCE: what a service
+# has already written to a production ledger, bus or token is outside every sweep here.
+#
+# LEDGER ACCOUNTS: everything ledgeraccounts.ts's own header lists — anything not written as a
+# TypeScript object literal, and types decided at runtime.
+#
+# SCOPES: it sees gates whose demand service-ci.yml's derivation can resolve. It does not GUESS at
+# the rest — an unresolvable demand fails the step, because a union with a hole in it reports live
+# scopes as dead. It cannot see a scope demanded by something that is not a gate (a grant list, an
+# operator console, a document), so "no gate demands it" is exactly what it claims and not "nothing
+# uses it". Front ends are audited too and demand nothing today; if one ever gates in the browser,
+# it is already in the union.
+#
+# TOPICS: it sees an emit as a `topic:` property or an `insert into outbox (topic, …) values ('…')`,
+# resolving constants and object members. Both shapes are in the estate today and a third would fail
+# the step rather than pass it — an unreadable emit is fatal, for the same reason as an unresolvable
+# scope. It cannot see a topic assembled at runtime, and its reachability check is syntactic: it
+# catches an exported emitter nothing references (`emitSessionRevoked`), and it does NOT prove the
+# caller is itself reached — a chain of dead functions calling each other satisfies it. A real answer
+# needs a call graph, and the honest note is cheaper than the false confidence.
+#
+# It also cannot judge a topic whose first segment names no service in the checkout: `web.page.viewed`
+# is emitted by four browsers, and "no producer emits it" would be a confident falsehood. Those are
+# printed as unjudged rather than passed silently.
+#
+# `tools/estate-topic-gaps.json` records the nine disagreements the FIRST estate-wide run found —
+# with evidence, an owning repository and the repair. It is a ratchet, not an exemption list: a new
+# instance is red on the day it lands, and a recorded one that gets fixed is ALSO red until the
+# record is deleted. The file argues its own existence at the top; the short version is that none of
+# the nine is fixable in micro-org, and a gate that is red from birth for other people's defects is a
+# gate somebody switches off within the week.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
 on:
@@ -117,9 +167,23 @@ on:
   # main, which is the only ref the schedule will ever use.
   push:
     branches: [main]
-    paths: ['.github/workflows/estate-ci.yml']
+    # The checkers and the recorded gaps are part of the mechanism: a change to either changes what
+    # this job asserts about the estate, so it re-proves itself the same way a change to the workflow
+    # does. `service-ci.yml` is here because the scope step runs THAT file's derivation rather than a
+    # copy of it — see "ONE DERIVATION" below — so editing it changes this job's answer too.
+    paths:
+      - '.github/workflows/estate-ci.yml'
+      - '.github/workflows/service-ci.yml'
+      - 'tools/estate-scopes.mjs'
+      - 'tools/estate-topics.mjs'
+      - 'tools/estate-topic-gaps.json'
   pull_request:
-    paths: ['.github/workflows/estate-ci.yml']
+    paths:
+      - '.github/workflows/estate-ci.yml'
+      - '.github/workflows/service-ci.yml'
+      - 'tools/estate-scopes.mjs'
+      - 'tools/estate-topics.mjs'
+      - 'tools/estate-topic-gaps.json'
   workflow_call:
     secrets:
       estate_token:
@@ -136,8 +200,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ledger-accounts:
-    name: No two services claim one ledger account with two types
+  # ONE JOB, ONE CHECKOUT, THREE INVARIANTS. Cloning the estate takes six seconds and three jobs
+  # would clone it three times to answer three questions about the same bytes. More than the waste,
+  # three checkouts are three chances to disagree about what "the estate" was at that moment.
+  estate-invariants:
+    name: The invariants that belong to the estate and to no repository in it
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -245,6 +312,82 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE CHECKERS FOR THE OTHER TWO INVARIANTS, AT THE REVISION UNDER TEST.
+      #
+      # They live in `micro-org/tools/` rather than in micro-conformance, which owns the ledger sweep,
+      # for one reason: at the time of writing micro-conformance belongs to another agent, and this
+      # repository is the one I can change. `tools/compat.ts` and `tools/cfctl.ts` are estate-wide
+      # checkers living here already, so it is not a new idea — but if conformance later adopts them,
+      # this step is the only thing that changes.
+      #
+      # The subtlety worth the two steps below: the estate clone ABOVE already contains micro-org, as
+      # `estate/org`, cloned from main. Running the checkers from there would mean that a pull request
+      # changing a checker was graded by main's copy of it — a workflow that cannot test its own
+      # change, which is the "check that cannot fail" shape all over again. So when this job runs in
+      # micro-org it checks itself out at this run's ref and uses THAT. A `workflow_call` from another
+      # repository cannot pin a ref in this one, so it gets main and is told so.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+        if: github.repository == 'cloudsforge-online/micro-org'
+        with: { path: self }
+      - name: Say which copy of the checkers is about to run
+        run: |
+          set -uo pipefail
+          if [ -f "${GITHUB_WORKSPACE}/self/tools/estate-topics.mjs" ]; then
+            echo "TOOLS=${GITHUB_WORKSPACE}/self" >> "$GITHUB_ENV"
+            echo "checkers: this run's own ref (${GITHUB_SHA}) — a change to one is graded by itself"
+          elif [ -f "${ESTATE}/org/tools/estate-topics.mjs" ]; then
+            echo "TOOLS=${ESTATE}/org" >> "$GITHUB_ENV"
+            echo "::warning::called from another repository, so the checkers are micro-org's main, not this run's ref"
+          else
+            echo "::error::no copy of the estate checkers anywhere — micro-org was not cloned and not checked out"
+            exit 1
+          fi
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # ONE DERIVATION, NOT TWO.
+      #
+      # The scope step needs the union of every scope every gate demands. service-ci.yml already
+      # derives that for a single repository, and it took three attempts to get right — inline
+      # literals, sibling constants, wrapper third arguments, computed families, each shape missed by
+      # a different earlier sweep. A second implementation here would drift from that one, and the
+      # drift would be invisible: this step's verdicts are all of the form "NOTHING demands this
+      # scope", which is exactly the sentence a derivation that quietly stopped seeing a demand shape
+      # produces. So the script is extracted from service-ci.yml and run as-is, 55 times.
+      #
+      # If the heredoc markers ever move, this fails here with a message naming the cause, rather than
+      # thirty steps later as "the registry is full of dead scopes".
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Take the scope derivation out of service-ci.yml
+        run: |
+          set -uo pipefail
+          src="${TOOLS}/.github/workflows/service-ci.yml"
+          out="${RUNNER_TEMP}/scope-audit.mjs"
+          if [ ! -f "$src" ]; then
+            echo "::error::no service-ci.yml at ${src}"
+            exit 1
+          fi
+          awk "/<<'SCOPE_AUDIT_SCRIPT'/{f=1;next} /^ *SCOPE_AUDIT_SCRIPT\$/{f=0} f" "$src" \
+            | sed 's/^          //' > "$out"
+          lines=$(grep -c . "$out" || true)
+          lines=${lines:-0}
+          if [ "$lines" -lt 200 ]; then
+            echo "::error::extracted ${lines} lines of scope audit from service-ci.yml, expected the whole script"
+            echo "The heredoc markers (<<'SCOPE_AUDIT_SCRIPT' … SCOPE_AUDIT_SCRIPT) have moved or been renamed."
+            echo "Fix the extraction — do NOT copy the script here, or the two derivations will drift."
+            exit 1
+          fi
+          if ! node --check "$out"; then
+            echo "::error::the extracted scope audit is not valid JavaScript — the de-indentation is wrong"
+            exit 1
+          fi
+          grep -q 'scope-audit: ok' "$out" || {
+            echo "::error::the extracted script does not look like the scope audit"
+            exit 1
+          }
+          echo "ok: ${lines} lines of service-ci.yml's own derivation, parsed"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
       # THE CANARY. It runs before the verdict, on every run, and it is why a green from this job
       # means something.
       #
@@ -312,6 +455,200 @@ jobs:
           node --import tsx src/cli.ts ledger-accounts --estate .. 2>&1 | tee "$RUNNER_TEMP/report.txt"
           exit "${PIPESTATUS[0]}"
 
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      # INVARIANT 2 — THE SCOPE REGISTRY IS TOTAL.
+      #
+      # service-ci.yml proves DEMANDS ⊆ REGISTRY, one repository at a time, and that half is already
+      # gated: a gate asking for a scope `@cloudsforge/contracts-auth` does not name fails that
+      # repository's build, because identity refuses to mint an unknown scope (identity/src/env.ts:141).
+      #
+      # REGISTRY ⊆ DEMANDS is the half no repository can reach. From inside micro-pricing, a
+      # registered scope nothing in micro-pricing demands is indistinguishable from one micro-wallet
+      # enforces; fifty-five green builds say nothing about it. What it actually is, is a credential
+      # identity will mint that opens nothing — and worse than useless, because the security review
+      # that reads the registry to answer "what could a caller with this token do" gets a wrong
+      # answer. contracts states the gap itself, above `isDeprecatedScope`: "Nothing proves the other
+      # direction, because no checkout sees every gate."
+      #
+      # This is that checkout. The 2026-08-03 audit that found `notify:send` and `wallet:provision`
+      # found them by hand; this is the same search, run nightly, by machine.
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      - name: The canary — the scope sweep can still go red, in both directions
+        if: always()
+        run: |
+          set -uo pipefail
+          registry="${ESTATE}/contracts/packages/auth/src/index.ts"
+          gate="${ESTATE}/beacon/src/__estate_ci_scope_canary.ts"
+          if [ ! -f "$registry" ]; then
+            echo "::error::no scope registry in this checkout, so the canary cannot be planted"
+            exit 1
+          fi
+          if [ ! -d "${ESTATE}/beacon/src" ]; then
+            echo "::error::micro-beacon has no src/ here, so the demand half of the canary cannot be planted"
+            exit 1
+          fi
+          if ! grep -q "'notify:send'" "$registry" || ! grep -q 'deprecated' "$registry"; then
+            echo "::error::this canary demands a scope the registry marks deprecated, and notify:send is no longer one"
+            echo "Pick another deprecated scope, or — if none is left — the second half of this canary"
+            echo "has nothing to test and should be deleted deliberately rather than left to pass emptily."
+            exit 1
+          fi
+          cp "$registry" "${RUNNER_TEMP}/auth-index.orig"
+
+          # (a) a registered scope no gate demands — the direction only this checkout can see.
+          # `sed -i` is deliberately not used: it means two different things on the two platforms this
+          # step is run on — a runner and a developer's laptop reproducing a red — and the BSD form
+          # would silently write a backup file into the estate under test.
+          sed "s|^export const SCOPES = Object.freeze({|&\n  'canary:orphan': Object.freeze({ service: 'canary', description: 'Injected by estate-ci and removed four lines later.' }),|" \
+            "${RUNNER_TEMP}/auth-index.orig" > "$registry"
+          # (b) a gate demanding a scope the registry says is dead — the self-emptying direction.
+          # The body is written at this file's own indentation ON PURPOSE: the YAML block scalar
+          # strips exactly this much, so the file lands at column zero. Several checks in this estate
+          # anchor on `^export`, and a heredoc indented one level further produces a file none of
+          # them can see — a canary that plants something invisible grades nothing.
+          cat > "$gate" <<'GATE'
+          export function estateCiCanaryGate(principal: { readonly scopes: readonly string[] }): boolean {
+          return principal.scopes.includes('notify:send')
+          }
+          GATE
+
+          if ! grep -q 'canary:orphan' "$registry" || [ ! -s "$gate" ]; then
+            echo "::error::the injections were not written — a canary that grades an unchanged tree grades nothing"
+            exit 1
+          fi
+
+          set +e
+          node "${TOOLS}/tools/estate-scopes.mjs" "$ESTATE" "${RUNNER_TEMP}/scope-audit.mjs" \
+            > "${RUNNER_TEMP}/scope-canary.txt" 2>&1
+          code=$?
+          set -e
+          cp "${RUNNER_TEMP}/auth-index.orig" "$registry"
+          rm -f "$gate"
+          if grep -q 'canary:orphan' "$registry" || [ -e "$gate" ]; then
+            echo "::error::an injection survived, so the real sweep below would judge a tree this job broke"
+            exit 1
+          fi
+
+          if [ "$code" -eq 0 ]; then
+            echo "::error::the sweep stayed GREEN with a dead scope registered AND a dead scope demanded — it is measuring nothing"
+            cat "${RUNNER_TEMP}/scope-canary.txt"
+            exit 1
+          fi
+          # Exit code alone is not a grade: a partial checkout, an unreadable registry and a missing
+          # node all exit non-zero. The sweep must NAME both things it was given.
+          missed=0
+          grep -q 'canary:orphan' "${RUNNER_TEMP}/scope-canary.txt" || { echo "::error::red, but never named the injected orphan scope"; missed=1; }
+          grep -q '__estate_ci_scope_canary.ts' "${RUNNER_TEMP}/scope-canary.txt" || { echo "::error::red, but never named the injected gate demanding a deprecated scope"; missed=1; }
+          if [ "$missed" -ne 0 ]; then
+            echo "A red for the wrong reason is how a check stops measuring what it claims to."
+            cat "${RUNNER_TEMP}/scope-canary.txt"
+            exit 1
+          fi
+          echo "ok: the sweep exited ${code} and named both injections — this gate can fail in both directions"
+
+      # `always()`, like the ledger verdict above and for the same reason, plus one this file did not
+      # have before: THREE INVARIANTS, THREE ANSWERS, EVERY RUN. A disagreement about ledger account
+      # types must not stop the estate being asked about its scopes — the two have nothing to do with
+      # each other, they are read from one checkout only because cloning it twice would be silly, and
+      # a run that reports the first failure and stops turns "the estate is wrong in three ways" into
+      # three nights of work instead of one.
+      - name: Every registered scope is demanded by a gate somewhere in the estate
+        if: always()
+        run: |
+          set -uo pipefail
+          node "${TOOLS}/tools/estate-scopes.mjs" "$ESTATE" "${RUNNER_TEMP}/scope-audit.mjs" 2>&1 \
+            | tee "${RUNNER_TEMP}/scopes.txt"
+          exit "${PIPESTATUS[0]}"
+
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      # INVARIANT 3 — THE TOPIC REGISTRY DESCRIBES WHAT SERVICES ACTUALLY SEND.
+      #
+      # `identity/src/topics.ts` and `notify/src/topics.ts` each reconcile their own source against
+      # the shared registry, in both directions, with a self-emptying quarantine. They are the right
+      # pattern and they share one blind spot: the REGISTRY is not the estate. Every one of those
+      # checks answers "does this repository agree with the registry", and none can answer "does the
+      # registry agree with the twenty repositories that emit".
+      #
+      # That gap is not theoretical here. notify held fifteen rules naming topics no producer emits;
+      # eleven had a producer emitting a DIFFERENT name — `trade.bot.triggered` is really
+      # created/started/paused, `market.offer.received` is `market.offer.made`,
+      # `devplatform.apikey.created` is `devplatform.key.issued`. Each of those was one grep away in
+      # another repository, and no CI job in the estate had both repositories on disk.
+      #
+      # REACHABILITY IS PART OF IT, and it belongs here rather than only in identity. `emitSessionRevoked`
+      # was written, correct, registered, consumed by a CRITICAL notify rule — and called by nothing,
+      # so the rule could never fire. Every name-based check passed, because the name was right. A
+      # guard that proves a topic's spelling proves nothing about whether the emit is reached, and the
+      # nineteen producers that never wrote identity's `unreferencedEmitters` have no such guard at
+      # all. This step runs it against all of them. (Identity's first version of that check passed
+      # while the function was still dead, because its own prose naming the function counted as a
+      # reference. Comments are stripped here before anything is matched, and the checker's header
+      # says so at the stripper.)
+      # ════════════════════════════════════════════════════════════════════════════════════════════
+      - name: The canary — the topic sweep can still go red, by name and by reachability
+        if: always()
+        run: |
+          set -uo pipefail
+          registry="${ESTATE}/contracts/packages/events/src/index.ts"
+          emitter="${ESTATE}/identity/src/__estate_ci_topic_canary.ts"
+          if [ ! -f "$registry" ] || [ ! -d "${ESTATE}/identity/src" ]; then
+            echo "::error::the events registry or micro-identity is missing from this checkout — the canary cannot be planted"
+            exit 1
+          fi
+          cp "$registry" "${RUNNER_TEMP}/events-index.orig"
+
+          # (a) a registered topic whose producer never emits it — identity.user.registered's defect,
+          #     which cost the estate "your account was created" for the life of the service.
+          sed "s|^export const TOPICS = Object.freeze({|&\n  'canary.estate.injected': Object.freeze({ producer: 'identity', payloadType: 'CanaryInjected', version: '1.0', keyedBy: 'user_id', description: 'Injected by estate-ci and removed a few lines later.' }),|" \
+            "${RUNNER_TEMP}/events-index.orig" > "$registry"
+          # (b) an emitter nothing calls — emitSessionRevoked's defect. The topic is real and spelled
+          #     correctly ON PURPOSE: that is what makes it invisible to every name-based check.
+          cat > "$emitter" <<'EMITTER'
+          export function emitEstateCiCanary(emit: (event: { topic: string; key: string; payload: Record<string, unknown> }) => void): void {
+          emit({ topic: 'identity.session.created', key: 'canary', payload: {} })
+          }
+          EMITTER
+
+          if ! grep -q 'canary.estate.injected' "$registry" || [ ! -s "$emitter" ]; then
+            echo "::error::the injections were not written — a canary that grades an unchanged tree grades nothing"
+            exit 1
+          fi
+
+          set +e
+          node "${TOOLS}/tools/estate-topics.mjs" "$ESTATE" "${TOOLS}/tools/estate-topic-gaps.json" \
+            > "${RUNNER_TEMP}/topic-canary.txt" 2>&1
+          code=$?
+          set -e
+          cp "${RUNNER_TEMP}/events-index.orig" "$registry"
+          rm -f "$emitter"
+          if grep -q 'canary.estate.injected' "$registry" || [ -e "$emitter" ]; then
+            echo "::error::an injection survived, so the real sweep below would judge a tree this job broke"
+            exit 1
+          fi
+
+          if [ "$code" -eq 0 ]; then
+            echo "::error::the sweep stayed GREEN with an unemitted registered topic AND a dead emitter — it is measuring nothing"
+            cat "${RUNNER_TEMP}/topic-canary.txt"
+            exit 1
+          fi
+          missed=0
+          grep -q 'canary.estate.injected' "${RUNNER_TEMP}/topic-canary.txt" || { echo "::error::red, but never named the injected registered-and-unemitted topic"; missed=1; }
+          grep -q 'emitEstateCiCanary' "${RUNNER_TEMP}/topic-canary.txt" || { echo "::error::red, but never named the injected emitter that nothing calls"; missed=1; }
+          if [ "$missed" -ne 0 ]; then
+            echo "A red for the wrong reason is how a check stops measuring what it claims to."
+            cat "${RUNNER_TEMP}/topic-canary.txt"
+            exit 1
+          fi
+          echo "ok: the sweep exited ${code} and named both injections — names AND reachability are being measured"
+
+      - name: The registry, the producers and the consumers agree about the bus
+        if: always()
+        run: |
+          set -uo pipefail
+          node "${TOOLS}/tools/estate-topics.mjs" "$ESTATE" "${TOOLS}/tools/estate-topic-gaps.json" 2>&1 \
+            | tee "${RUNNER_TEMP}/topics.txt"
+          exit "${PIPESTATUS[0]}"
+
       # ────────────────────────────────────────────────────────────────────────────────────────────
       # A red with an owner. See "WHERE A FAILURE LANDS" in the header: without this, the schedule's
       # entire output is a run record that ages out and an email nobody is on.
@@ -327,15 +664,42 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # Each invariant's own report, whether or not it was the one that failed. A green report
+          # beside a red one is what says which of the three is broken, and a run that pasted only
+          # the failure would send the reader back to the log to find out.
           {
             echo "\`estate-ci\` failed: <${RUN_URL}>"
             echo
-            echo "Two services name one ledger account key with two \`type\`s, or the sweep itself broke."
-            echo "The second service to post in production has **every** entry refused —"
-            echo "\`AccountConflictError\`, \`ledger/src/accounts.ts:125\` — and no per-service suite can see it."
+            echo "One of the invariants that belongs to the estate and to no repository in it is broken,"
+            echo "or a sweep that reads them did. Nothing here is visible to any single repository's CI."
+            echo
+            echo "### Ledger account types"
+            echo
+            echo "Two services naming one \`(subject, asset_code, purpose)\` with two \`type\`s means the"
+            echo "second to post in production has **every** entry refused — \`AccountConflictError\`,"
+            echo "\`ledger/src/accounts.ts:125\`."
             echo
             echo '```'
-            tail -c 60000 "$RUNNER_TEMP/report.txt" 2>/dev/null || echo "(the sweep produced no report — read the run)"
+            tail -c 30000 "$RUNNER_TEMP/report.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
+            echo '```'
+            echo
+            echo "### Scope registry totality"
+            echo
+            echo "A live scope no gate demands is a credential identity mints that opens nothing; a"
+            echo "deprecated scope some gate demands is a registry statement that has stopped being true."
+            echo
+            echo '```'
+            tail -c 30000 "$RUNNER_TEMP/scopes.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
+            echo '```'
+            echo
+            echo "### Topic registry reconciliation"
+            echo
+            echo "A registered topic no producer emits is a feature that reports itself as delivered."
+            echo "So is an emitter nothing calls — that one was \`emitSessionRevoked\`, under a **critical**"
+            echo "notify rule, for the life of the service."
+            echo
+            echo '```'
+            tail -c 30000 "$RUNNER_TEMP/topics.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
             echo '```'
           } > "$RUNNER_TEMP/issue.md"
 
@@ -351,7 +715,7 @@ jobs:
             echo "updated issue #${open}"
           else
             gh issue create --repo "$REPO" --label estate-invariant \
-              --title "estate-ci: the estate disagrees about a ledger account type" \
+              --title "estate-ci: an invariant no repository can see is broken" \
               --body-file "$RUNNER_TEMP/issue.md" \
               || echo "::warning::could not open an issue — is issues:write granted?"
           fi
@@ -372,19 +736,20 @@ jobs:
             || echo "::warning::could not close issue #${open}"
 
       # ────────────────────────────────────────────────────────────────────────────────────────────
-      # THE NEXT TWO CHECKS BELONG HERE, AND ARE A STEP EACH RATHER THAN A NEW MECHANISM.
+      # WHAT A FOURTH INVARIANT WOULD COST, WRITTEN DOWN WHILE IT IS FRESH.
       #
-      #   * SCOPE REGISTRY TOTALITY. service-ci.yml already derives every scope a service DEMANDS and
-      #     fails on one the registry lacks — but only ever for one service at a time, so it can
-      #     never answer the other direction: a scope the registry declares that no service in the
-      #     estate demands is a scope identity will happily mint for a surface that does not exist.
-      #     That question needs the union of 55 repositories, which is exactly the checkout above.
-      #   * TOPIC REGISTRY RECONCILIATION. `identity/src/topics.ts` names what is produced and
-      #     `notify/src/topics.ts` names what is consumed; a producer with no consumer and a consumer
-      #     with no producer are both invisible to either repository's CI, because each repository
-      #     holds one side of the pair.
+      # Three steps, one checkout, one canary each. Adding a fourth is: a checker in `tools/`, a
+      # canary that injects a violation and requires the sweep to NAME it, a verdict step with
+      # `if: always()`, its report in the issue body, and its file in the `paths:` filter at the top
+      # so a change to it re-proves itself. Nothing else in this file needs to change.
       #
-      # Both are the same shape as the sweep above — read the whole estate, reconcile two halves that
-      # live in different repositories — and both want the same canary discipline: a step that is not
-      # shown to fail is a step that will one day stop passing for a reason nobody notices.
+      # The one found while writing the third, and deliberately NOT added here, so that it is not
+      # lost: several services stamp the envelope's wire `version` as an INTEGER (`values (…, 1, …)`,
+      # ledger/src/entries.ts:426 and its siblings) where `@cloudsforge/contracts-events` requires
+      # `"major.minor"`. Those events are refused at the envelope and never delivered. It is a real
+      # defect and it is NOT estate-wide: a producer's own repository depends on contracts-events and
+      # can check its own outbox writes against it without seeing another repository at all. It
+      # belongs in service-ci.yml or in each producer's suite, and putting it here would make this
+      # job the place where per-repository checks are dumped — which is how an estate-wide gate
+      # becomes a nightly red about somebody else's file.
       # ────────────────────────────────────────────────────────────────────────────────────────────
