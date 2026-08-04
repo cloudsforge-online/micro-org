@@ -37,19 +37,23 @@ test('the registry holds every repository in the organisation, and every directo
   // The 59 managed rows are exactly the 59 `micro-*` repositories the organisation lists. The 11
   // kept rows are the other 11, less `.github`, whose omission is argued in registry.ts rather
   // than merely true: it cannot carry the prefix and cannot be checked out at micro/.github.
-  assert.equal(REGISTRY.length, 70);
+  // 72 since 2026-08-04: `lantern-web` and `beacon-web` were added, having been absent since this
+  // file was written. The estate compose ran both the whole time, so a release could not deploy
+  // two surfaces the estate serves — and `--verify` could not report them, because it can only
+  // check images for repositories this registry names.
+  assert.equal(REGISTRY.length, 72);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
   assert.equal(counts.get('service'), 26, '22 from 03 §1.1, plus emberkin, foresight, aetherholm and tessera');
-  assert.equal(counts.get('web'), 16, '11 from 03 §1.2, plus the five 05-user-journeys §1 records');
+  assert.equal(counts.get('web'), 18, '11 from 03 §1.2, the five 05-user-journeys §1 records, and the two operator consoles');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 4, '4 library repositories');
   assert.equal(counts.get('assets'), 4, 'brand and the three per-title asset repositories');
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 59);
-  assert.equal(deployableRepos().length, 45, 'services, frontends and operations services');
+  assert.equal(managedRepos().length, 61);
+  assert.equal(deployableRepos().length, 47, 'services, frontends and operations services');
 });
 
 test('names are unique — a duplicate would make one entry unreachable', () => {

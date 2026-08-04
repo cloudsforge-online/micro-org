@@ -246,6 +246,19 @@ export const REGISTRY: readonly Repo[] = [
   web('aetherholm-web', '20', 'Archipelago map, city view, fleet control, battle reports, chronicle browser'),
   web('tessera-web', '23', 'Isometric renderer, build and place tools, the Kiln, the ward map, Workshop pages'),
 
+  // -- 2 operator consoles, absent from this file until 2026-08-04 -----------------------------
+  //
+  // `lantern` and `beacon` are `ops()` services below, and their CONSOLES were never listed here
+  // at all — so cfctl pinned neither, no publish job was ever added to either (both rollouts
+  // worked from this registry), no image was ever built, and the first real deployment answered
+  // 502 on both. The estate compose has run them the whole time; nothing reconciled the two lists.
+  //
+  // That is the failure this registry exists to prevent, so the omission is worth naming rather
+  // than quietly fixing: a surface the estate SERVES but the release cannot DEPLOY is exactly the
+  // gap `cfctl release --verify` is meant to make loud, and it stayed silent because a surface it
+  // does not know about cannot be reported missing.
+  //
+  // Both are `adminOnly` in `ui/packages/ui/src/surfaces.ts` and both now render the shared footer.
   // -- 3 operations services (03 §1.3) --------------------------------------------------------
   ops('lantern', 'P3', 'Log triage: OTLP push ingest, fingerprinting, browser errors and RUM'),
   ops('beacon', 'P3', 'Synthetic monitoring, journeys, incidents, SLOs. The release gate (AD-04)'),
@@ -288,6 +301,27 @@ export const REGISTRY: readonly Repo[] = [
   machinery('docs', '—', 'The ecosystem documentation. 03 §1.5 gave this to `stack`; it is its own repository now'),
   machinery('deploy', '—', 'Compose, gateway, OTel collector, Prometheus, Tempo, Loki, Grafana, Alertmanager, runbooks'),
   machinery('conformance', '—', 'The characterisation corpus, and the estate-wide sweeps estate-ci.yml runs against every repository'),
+
+  // -- 2 operator consoles, absent from this file until 2026-08-04 -----------------------------
+  //
+  // APPENDED, not filed with the other frontends, and the comment above `DERIVED_PORT_ORDER` is
+  // why: ports derive from position in `deployableRepos()`, so a row inserted mid-list renumbers
+  // everything below it. I filed these tidily beside the other `web()` rows first, and the test
+  // named exactly what that cost — `lantern` 4142, `beacon` 4143 and `faucet` 4144 all moved.
+  // Appending is the only free edit. Tidiness is not worth renumbering a port another repository
+  // has already written down.
+  //
+  // `lantern` and `beacon` are `ops()` services above; their CONSOLES were never listed here at
+  // all. So cfctl pinned neither, no publish job was ever added to either (both rollouts worked
+  // from this registry), no image was ever built, and the first real deployment answered 502 on
+  // both. The estate compose has run them the whole time and nothing reconciled the two lists —
+  // a surface the estate SERVES but a release cannot DEPLOY, which is precisely what
+  // `cfctl release --verify` exists to catch and could not, because a surface this file does not
+  // know about cannot be reported missing.
+  //
+  // Both are `adminOnly` in `ui/packages/ui/src/surfaces.ts`; both now render the shared footer.
+  web('lantern-web', 'P3', 'Lantern console: log triage, fingerprints, browser errors and RUM. Operator-only'),
+  web('beacon-web', 'P3', 'Beacon console: journeys, incidents, SLOs and the release gate. Operator-only'),
 
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
   // These are in the list so that their absence from every cfctl operation is a stated decision
