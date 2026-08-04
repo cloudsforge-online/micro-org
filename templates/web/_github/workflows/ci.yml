@@ -25,6 +25,26 @@ jobs:
       contents: read
       packages: read
 
+  # The image this repository ships, published where a deploy can pull it. Without this job the
+  # repository builds an image in CI and throws it away, and `cfctl release` writes a manifest
+  # naming an image that does not exist.
+  publish:
+    needs: ci
+    # Only a green main push publishes. Not a pull request, not a branch: a tag that can be
+    # produced by an unmerged change is a tag a release manifest cannot trust.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: __ORG__/micro-org/.github/workflows/publish-image.yml@main
+    with:
+      kind: web
+    secrets:
+      estate_token: ${{ secrets.ESTATE_READ_TOKEN }}
+    permissions:
+      contents: read
+      # `write`, and it must be granted HERE. A called workflow's token can only be reduced, never
+      # elevated, so publish-image.yml cannot ask for this on the caller's behalf — leaving it at
+      # `read` fails the run at startup rather than at the push.
+      packages: write
+
   hygiene:
     uses: __ORG__/micro-org/.github/workflows/secret-hygiene.yml@main
     permissions:

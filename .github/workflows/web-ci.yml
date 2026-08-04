@@ -257,6 +257,10 @@ jobs:
           file: ${{ inputs.dockerfile }}
           build-contexts: |
             uipkg=${{ github.workspace }}/ui-ctx
+          # `push: false` is correct here for the same reason it is correct in service-ci.yml: this
+          # job is a gate that must `load` the image to probe it, and the producer is the separate
+          # publish-image.yml — separate because a caller granting `packages: read` cannot be
+          # elevated by the workflow it calls, and asking would fail every caller at startup.
           push: false
           load: true
           tags: ${{ inputs.app }}:ci

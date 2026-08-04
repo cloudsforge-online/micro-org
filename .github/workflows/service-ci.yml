@@ -1207,6 +1207,16 @@ jobs:
           build-contexts: |
             runtimepkgs=${{ github.workspace }}/runtime-ctx
             contractspkgs=${{ github.workspace }}/contracts-ctx
+          # `push: false` IS CORRECT HERE, and it is not the reason the estate has no published
+          # images. This job is a GATE: it builds the image in order to boot it against Postgres
+          # and read /livez, which needs `load: true` — the image in the runner's own daemon. The
+          # PRODUCER is a separate workflow, publish-image.yml, and it has to be separate: every
+          # one of the 35 repositories that calls this file grants the calling job
+          # `permissions: {contents: read, packages: read}`, and a called workflow's token can only
+          # be reduced, never elevated. Declaring `packages: write` in THIS file would not fail to
+          # push — it would fail all 35 repositories at STARTUP, on pull requests as well as on
+          # main. Measured: micro-org runs 30900277471 (capped -> startup_failure) and 30900280323
+          # (granted -> success). See publish-image.yml's header.
           push: false
           load: true
           tags: ${{ inputs.service }}:ci

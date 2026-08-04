@@ -1,0 +1,344 @@
+name: publish-image
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE PRODUCER. Until this file existed the estate had a release format, a generator and a
+# consumer, and nothing that made the artefact all three describe.
+#
+#   generator   org/tools/cfctl.ts:889-934   `cfctl release` writes a manifest naming, per service,
+#                                            ghcr.io/<org>/<repo> at that repository's package.json
+#                                            version (:906) and the commit it was built from.
+#   verifier    org/tools/cfctl.ts:937-975   `cfctl release --verify` requires `docker manifest
+#                                            inspect` to succeed for EVERY image the manifest names.
+#   consumer    deploy/scripts/release-render.py
+#                                            renders a compose overlay pinning every image and
+#                                            deleting `build:` with `!reset`, so a release deploy
+#                                            cannot fall back to building from a working tree.
+#   deployer    deploy/scripts/release-deploy.sh:99-125
+#                                            refuses to change anything until every image pulls.
+#
+# With no producer, `release-deploy.sh` stops at that gate for every service in the estate and the
+# manifest path — the one that makes "deployable and rollbackable BY MANIFEST ALONE" true — cannot
+# be used at all. That is what this file fixes.
+#
+# ── WHY THIS IS A SEPARATE WORKFLOW AND NOT `push: true` IN service-ci.yml ──────────────────────
+#
+# The obvious fix — flip `service-ci.yml:1210` and `web-ci.yml:260` to `push: true` and add
+# `packages: write` — CANNOT WORK, and does not fail gently. It was measured, not assumed:
+#
+#   micro-org run 30900277471   caller grants `packages: read`, called workflow asks for
+#                               `packages: write`  ->  STARTUP_FAILURE. The run never begins.
+#   micro-org run 30900280323   the same called workflow, caller grants `packages: write`
+#                               ->  success.
+#
+# GitHub's rule is that a called workflow's token "can only be maintained or reduced — not
+# elevated". Every one of the 35 repositories that calls service-ci.yml or web-ci.yml pins
+# `permissions: {contents: read, packages: read}` on the calling job (micro-ledger
+# .github/workflows/ci.yml is the canonical copy). So declaring `packages: write` anywhere in
+# service-ci.yml would not merely fail to push — it would fail every one of those 35 repositories
+# at startup, on pull requests as well as on main, before a single step ran.
+#
+# Publishing therefore has to be a job the CALLER opts into with its own grant. That is also the
+# honest separation: `service-ci.yml`'s image job is a GATE — it builds with `load: true` so it can
+# boot the image against Postgres and read `/livez`, and `load` and `push` want different things
+# from buildx. This file is the producer. They are different jobs because they have different
+# purposes, and `push: false` in the gate is correct and stays.
+#
+# ── WHAT THE CALLER ADDS ────────────────────────────────────────────────────────────────────────
+#
+#   publish:
+#     needs: estate                 # only publish what passed
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     uses: cloudsforge-online/micro-org/.github/workflows/publish-image.yml@main
+#     with:
+#       kind: service               # or: web
+#     secrets:
+#       estate_token: ${{ secrets.ESTATE_READ_TOKEN }}
+#     permissions:
+#       contents: read
+#       packages: write             # <- without this the run fails at STARTUP, loudly, here
+#
+# ── THE PACKAGE VISIBILITY TRAP, AND WHY NO MANUAL STEP IS EXPECTED ─────────────────────────────
+#
+# A GHCR package inherits the visibility of the repository it is linked to, and it is linked by the
+# `org.opencontainers.image.source` label this workflow sets. All 61 active repositories are
+# public, so a package published from one of them comes out public. That is measured rather than
+# hoped: micro-hearth publishes with the same GITHUB_TOKEN mechanism, and
+# `ghcr.io/cloudsforge-online/hearth-node` answers an ANONYMOUS pull today. The final step below
+# re-checks that property per package and says so if it is ever not true, because the failure it
+# guards is somebody else's 403 at pull time rather than an error here.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_call:
+    inputs:
+      kind:
+        description: >-
+          'service' or 'web'. It selects the sibling checkouts the Dockerfile's named build contexts
+          need — a service resolves @cloudsforge/* through `link:../runtime` and `link:../contracts`
+          and its Dockerfile reads them as `COPY --from=runtimepkgs` / `--from=contractspkgs`; a
+          frontend reads the design system as `--from=uipkg`. Exactly what service-ci.yml and
+          web-ci.yml already do for their gate builds. A context the Dockerfile never references
+          costs nothing.
+        required: true
+        type: string
+      image:
+        description: >-
+          The image name, WITHOUT the registry. Defaults to this repository's own name, which is
+          not a convenience: `cfctl` derives the manifest's image as
+          `ghcr.io/<org>/<repo.repo>` (org/tools/registry.ts:367-369, asserted in
+          test/cfctl.test.ts:273), and repo.repo IS the repository name. Overriding this is how a
+          release manifest comes to name an image nothing publishes.
+        required: false
+        default: ''
+        type: string
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+      context:
+        required: false
+        default: .
+        type: string
+      platforms:
+        description: >-
+          linux/amd64 by default. The estate's targets are an x86 ProLiant and x86 cloud instances,
+          and building arm64 as well roughly doubles the build for an architecture nothing deploys
+          to yet. Add it here on the day something runs on Ampere.
+        required: false
+        default: linux/amd64
+        type: string
+    secrets:
+      estate_token:
+        description: >-
+          contents:read on micro-runtime and micro-contracts (kind: service) or micro-ui
+          (kind: web), so their sibling checkouts resolve. Falls back to the job token, which is
+          enough while those repositories are public.
+        required: false
+    outputs:
+      version:
+        description: The package.json version this run published, or the empty string if it was already published.
+        value: ${{ jobs.publish.outputs.version }}
+      digest:
+        description: The digest of the image this run pushed.
+        value: ${{ jobs.publish.outputs.digest }}
+
+jobs:
+  publish:
+    name: Publish to GHCR
+    runs-on: ubuntu-latest
+
+    # DEFENCE IN DEPTH, not the primary gate. The caller is expected to carry the same `if:`, but a
+    # producer that will push from any ref that happens to call it is one mis-copied caller away
+    # from putting a branch build behind the `main` tag. A pull request from a fork cannot reach
+    # here at all — a fork's token is read-only regardless of what the caller asks for — and this
+    # also refuses a push on any branch but main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      version: ${{ steps.tags.outputs.version_tag }}
+      digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        if: inputs.kind == 'service'
+        with:
+          repository: cloudsforge-online/micro-runtime
+          path: runtime-ctx
+          token: ${{ secrets.estate_token || github.token }}
+      - uses: actions/checkout@v4
+        if: inputs.kind == 'service'
+        with:
+          repository: cloudsforge-online/micro-contracts
+          path: contracts-ctx
+          token: ${{ secrets.estate_token || github.token }}
+      - uses: actions/checkout@v4
+        if: inputs.kind == 'web'
+        with:
+          repository: cloudsforge-online/micro-ui
+          path: ui-ctx
+          token: ${{ secrets.estate_token || github.token }}
+
+      - name: The kind is one this workflow knows
+        run: |
+          set -euo pipefail
+          case "${{ inputs.kind }}" in
+            service|web) echo "ok: kind=${{ inputs.kind }}" ;;
+            *)
+              echo "::error::kind must be 'service' or 'web', not '${{ inputs.kind }}'"
+              echo "It selects the sibling checkouts the Dockerfile's named build contexts need."
+              exit 1 ;;
+          esac
+
+      # ── The tags ──────────────────────────────────────────────────────────────────────────────
+      #
+      # THREE, and each is there for a different reason:
+      #
+      #   <version>   package.json's version. THE LOAD-BEARING ONE: `cfctl release` writes exactly
+      #               this into the manifest (org/tools/cfctl.ts:906), so a release that does not
+      #               carry it is a manifest `--verify` rejects. It is treated as IMMUTABLE — see
+      #               the step below, which refuses to move an existing one.
+      #   sha-<sha>   the full commit sha. Always unique, always safe to push, and the only tag that
+      #               can answer "what code is this" for a commit that did not bump the version.
+      #   main        the moving head of the branch, which is what a compose file without a manifest
+      #               defaults to. It is expected to move; that is its whole job.
+      #
+      # NOT `latest`. `latest` on a service image means "whatever was built most recently by
+      # anything", which is the tag that makes "the artefact that was tested is not the artefact
+      # that runs" possible in the first place.
+      - id: tags
+        name: Work out the tags
+        env:
+          IMAGE_INPUT: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_INPUT:-}"
+          [ -n "$image" ] || image="${GITHUB_REPOSITORY##*/}"
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}"
+
+          if [ ! -f package.json ]; then
+            echo "::error::no package.json, so there is no version to tag with"
+            echo "cfctl release records package.json's version as the image tag (cfctl.ts:906)."
+            exit 1
+          fi
+          version=$(node -p "require('./package.json').version || ''")
+          if [ -z "$version" ]; then
+            echo "::error::package.json has no version field"
+            exit 1
+          fi
+
+          echo "image=$ref"        >> "$GITHUB_OUTPUT"
+          echo "version=$version"  >> "$GITHUB_OUTPUT"
+          echo "ok: ${ref} @ ${version} (${GITHUB_SHA})"
+
+      # ── The version tag is immutable ──────────────────────────────────────────────────────────
+      #
+      # Republishing 1.2.0 from a later commit would mean two different artefacts wearing one name,
+      # and a manifest pinned to 1.2.0 would silently stop describing what it was verified against.
+      # Rollback is checking out the previous manifest (releases/README.md), and that only works if
+      # a tag in an old manifest still resolves to the image that manifest was cut from.
+      #
+      # So an existing version tag is NEVER overwritten. It is also not a failure: most commits on
+      # main are not releases, and a producer that went red on every unbumped commit would be
+      # switched off within a week. The commit is still fully published under sha-<sha> and main;
+      # only the release name is withheld, and the reason is stated where somebody will read it.
+      - id: immutable
+        name: Is this version already published?
+        run: |
+          set -uo pipefail
+          image="${{ steps.tags.outputs.image }}"
+          version="${{ steps.tags.outputs.version }}"
+          path="${image#ghcr.io/}"
+
+          # The ANONYMOUS pull flow: GHCR answers 401 to an unauthenticated /v2/ request for a
+          # PUBLIC package as readily as for a private one, so a bare curl cannot tell them apart.
+          # A token has to be fetched first. (org/tools/cfctl.ts:498-507 gets this wrong and reports
+          # every published package as private; fixed in the same change as this file.)
+          token=$(curl -s -m 10 "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+                  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' \
+                 -H "Authorization: Bearer ${token}" \
+                 "https://ghcr.io/v2/${path}/manifests/${version}")
+
+          if [ "$code" = "200" ]; then
+            echo "publish_version=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${image}:${version} already exists and will NOT be moved."
+            echo "Bump package.json's version to cut a new release; this commit is still published"
+            echo "as sha-${GITHUB_SHA} and main."
+          else
+            echo "publish_version=true" >> "$GITHUB_OUTPUT"
+            echo "ok: ${version} is not yet published (HTTP ${code})"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          build-contexts: |
+            runtimepkgs=${{ github.workspace }}/runtime-ctx
+            contractspkgs=${{ github.workspace }}/contracts-ctx
+            uipkg=${{ github.workspace }}/ui-ctx
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.tags.outputs.image }}:main
+            ${{ steps.immutable.outputs.publish_version == 'true' && format('{0}:{1}', steps.tags.outputs.image, steps.tags.outputs.version) || '' }}
+          # `image.source` is what LINKS the package to this repository, and the link is what gives
+          # the package the repository's visibility. Without it a new package is an orphan that
+          # inherits nothing and has to be made public by hand — the 403-at-pull-time trap.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── The pull side, checked from where a deploy stands ─────────────────────────────────────
+      #
+      # A push that succeeded proves the writer's credentials. It proves nothing about the reader's,
+      # and the reader is a deploy host with no credentials at all. This is the same 403 trap
+      # publish.yml guards for npm packages, checked the way GHCR actually answers.
+      - name: The published image can be pulled anonymously
+        if: always() && steps.push.outcome == 'success'
+        run: |
+          set -uo pipefail
+          image="${{ steps.tags.outputs.image }}"
+          path="${image#ghcr.io/}"
+          token=$(curl -s -m 10 "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
+                  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' \
+                 -H "Authorization: Bearer ${token}" \
+                 -H 'Accept: application/vnd.oci.image.index.v1+json' \
+                 -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+                 "https://ghcr.io/v2/${path}/manifests/sha-${GITHUB_SHA}")
+
+          {
+            echo "### ${image}"
+            echo ""
+            echo "| tag | |"
+            echo "| --- | --- |"
+            echo "| \`sha-${GITHUB_SHA}\` | pushed |"
+            echo "| \`main\` | pushed |"
+            if [ "${{ steps.immutable.outputs.publish_version }}" = "true" ]; then
+              echo "| \`${{ steps.tags.outputs.version }}\` | pushed — this commit is a release |"
+            else
+              echo "| \`${{ steps.tags.outputs.version }}\` | **not moved** — already published |"
+            fi
+            echo ""
+            echo "digest: \`${{ steps.push.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$code" = "200" ]; then
+            echo "ok: an anonymous pull of ${image} succeeds — a deploy host can read it"
+            exit 0
+          fi
+
+          echo "::error::${image} cannot be pulled anonymously (HTTP ${code})."
+          echo "The package is private. A GHCR package inherits the visibility of the repository it"
+          echo "is linked to, so this normally resolves itself on a public repository — when it does"
+          echo "not, every consumer without a token on this repository gets a 403 AT PULL TIME, in"
+          echo "somebody else's deploy, and 'cfctl release --verify' will refuse the manifest."
+          echo "Fix: GitHub -> this repository -> Packages -> ${image##*/} -> Package settings ->"
+          echo "Change visibility -> Public."
+          {
+            echo ""
+            echo "> **This package is private.** Make it public: repository -> Packages ->"
+            echo "> \`${image##*/}\` -> Package settings -> Change visibility -> Public."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

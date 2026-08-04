@@ -496,11 +496,50 @@ function workflowFiles(root: string): string[] {
 }
 
 function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' {
-  // Anonymous pull. GHCR answers 401 for a package that exists but is private, which is the
-  // 403 trap this check exists for: a new repository's package inherits the repository's
-  // visibility, and the deploy path fails at pull time rather than at publish time.
-  const url = `https://ghcr.io/v2/${ORG}/${repo.repo}/tags/list`;
-  const result = run('curl', ['-s', '-m', '8', '-o', '/dev/null', '-w', '%{http_code}', url]);
+  // The 403 trap this check exists for: a new repository's package inherits the repository's
+  // visibility, and the deploy path fails at PULL time rather than at publish time.
+  //
+  // IT ASKED THE QUESTION IN A WAY GHCR CANNOT ANSWER. This was a single bare GET of
+  // `/v2/<org>/<repo>/tags/list`, treating 401 as 'private-or-absent' — but GHCR answers 401 to
+  // an UNAUTHENTICATED /v2/ request for a PUBLIC package just as readily as for a private one.
+  // The registry protocol is challenge-response: the 401 carries a `WWW-Authenticate` header
+  // telling the client where to fetch a token, and anonymous callers are expected to go and get
+  // one. So this reported 'private or has never been published' for every package in existence,
+  // including packages that are public and pulling fine.
+  //
+  // Measured, not reasoned: `ghcr.io/cloudsforge-online/hearth-node` is published and PUBLIC —
+  // micro-hearth has been pushing it since July — and a bare GET of its tags list returns 401,
+  // while the same request bearing an anonymously-obtained token returns 200.
+  //
+  // That mattered more than a cosmetic wrong word. This check is the estate's only automated
+  // warning about the visibility trap, and a check that fires on everything is a check nobody
+  // reads — so on the day a package really was private it would have said exactly what it had
+  // been saying all along about the ones that were fine.
+  const pkgPath = `${ORG}/${repo.repo}`;
+  const tokenResult = run('curl', [
+    '-s',
+    '-m',
+    '8',
+    `https://ghcr.io/token?service=ghcr.io&scope=repository:${pkgPath}:pull`,
+  ]);
+  if (!tokenResult.ok) return 'unknown';
+  // The token endpoint answers 200 with a JSON body for anyone; what distinguishes public from
+  // private is whether the token it hands back can then READ the package.
+  const token = /"token"\s*:\s*"([^"]+)"/.exec(tokenResult.out)?.[1];
+  if (!token) return 'unknown';
+
+  const result = run('curl', [
+    '-s',
+    '-m',
+    '8',
+    '-o',
+    '/dev/null',
+    '-w',
+    '%{http_code}',
+    '-H',
+    `Authorization: Bearer ${token}`,
+    `https://ghcr.io/v2/${pkgPath}/tags/list`,
+  ]);
   if (!result.ok) return 'unknown';
   if (result.out === '200') return 'public';
   if (result.out === '401' || result.out === '403') return 'private-or-absent';
