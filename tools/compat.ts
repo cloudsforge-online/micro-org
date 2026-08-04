@@ -342,7 +342,21 @@ function walk(
   }
 
   const properties = type.getProperties();
-  const isObjectish = (type.flags & ts.TypeFlags.Object) !== 0 && properties.length > 0;
+  // Intersections count, and leaving them out was not a small gap. A BRANDED type — the ordinary
+  // TypeScript way to say "this value may only be built by the sanctioned factory" — is written
+  // `Readonly<Record<K, V>> & { readonly [brand]: true }`, and an intersection's flags do NOT
+  // include `Object`. So the whole type collapsed to one `scalar` leaf and every field under it
+  // read as REMOVED. `micro-contracts` 326de9d hit exactly that: branding `explorerTxUrl` to stop
+  // a wrong explorer URL being written by hand reported `.mainnet`/`.testnet` as "removed — a
+  // consumer reading it gets undefined at runtime", when the reader's type was byte-for-byte the
+  // one it had before and nothing was removed at all.
+  //
+  // That is the failure mode this file exists to prevent, pointed the wrong way: a false BREAKING
+  // teaches people the gate cries wolf, and a gate that is routinely overridden guards nothing.
+  // `getProperties()` on an intersection already returns the combined members, and the brand
+  // itself is a unique symbol, so the `__@` guard below drops it as the unstable name it is.
+  const objectish = ts.TypeFlags.Object | ts.TypeFlags.Intersection;
+  const isObjectish = (type.flags & objectish) !== 0 && properties.length > 0;
   if (isObjectish) {
     record(ctx, {
       path: entryPath,

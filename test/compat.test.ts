@@ -53,6 +53,20 @@ test('an added required field on an output type passes', () => {
   assert.deepEqual(breaking('added-required-output'), []);
 });
 
+test('branding a type does not read as removing its fields', () => {
+  // `micro-contracts` 326de9d branded `explorerTxUrl` so a wrong explorer URL could not be written
+  // by hand, and this gate called it BREAKING: an intersection's flags do not include `Object`, so
+  // the type collapsed to one scalar leaf and every field under it read as removed. The reader's
+  // type was unchanged. Both halves are asserted, because "no breaking findings" would also pass
+  // if the walker stopped seeing the fields altogether.
+  assert.deepEqual(breaking('branded-alias'), []);
+  const paths = [...surfaceOfEntry(path.join(FIXTURES, 'branded-alias', 'head.ts')).entries.keys()];
+  assert.ok(paths.includes('ChainSpec.explorerTxUrl.mainnet'), 'mainnet is still walked');
+  assert.ok(paths.includes('ChainSpec.explorerTxUrl.testnet'), 'testnet is still walked');
+  // The brand is a unique symbol, whose checker-assigned name shifts between compilations.
+  assert.ok(!paths.some((p) => p.includes('__@')), 'the brand itself is not surface');
+});
+
 test('a removed field fails', () => {
   const findings = breaking('removed-field');
   assert.equal(findings.length, 1);
