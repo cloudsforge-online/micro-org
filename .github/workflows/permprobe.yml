@@ -1,11 +1,6 @@
 name: permprobe
 
-# TEMPORARY, and deleted as soon as it has answered. See permprobe-called.yml.
-#
-# `capped` reproduces the estate's calling convention exactly (contents: read + packages: read,
-# as in micro-ledger/.github/workflows/ci.yml). `granted` is the same call with packages: write.
-# The called workflow asks for packages: write in both cases.
-
+# TEMPORARY. The caller grants exactly what all 35 estate callers grant.
 on:
   workflow_dispatch:
 
@@ -17,11 +12,3 @@ jobs:
     permissions:
       contents: read
       packages: read
-
-  granted:
-    uses: ./.github/workflows/permprobe-called.yml
-    with:
-      label: caller granted packages write
-    permissions:
-      contents: read
-      packages: write

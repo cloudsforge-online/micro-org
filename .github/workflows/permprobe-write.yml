@@ -1,0 +1,14 @@
+name: permprobe-write
+
+# TEMPORARY. The control: the same called workflow, with packages:write granted.
+on:
+  workflow_dispatch:
+
+jobs:
+  granted:
+    uses: ./.github/workflows/permprobe-called.yml
+    with:
+      label: caller granted packages write
+    permissions:
+      contents: read
+      packages: write
