@@ -41,19 +41,30 @@ test('the registry holds every repository in the organisation, and every directo
   // file was written. The estate compose ran both the whole time, so a release could not deploy
   // two surfaces the estate serves — and `--verify` could not report them, because it can only
   // check images for repositories this registry names.
-  assert.equal(REGISTRY.length, 72);
+  //
+  // 71 since the P13 fold: `micro-foresight-admin-web` is ARCHIVED. Its operator panel is a
+  // section inside `micro-admin-web` (`/foresight`), nothing is served at `foresight-admin.<apex>`
+  // any more, and the local checkout is gone — which is what this test's second half measures.
+  // The count going DOWN is the unusual direction here, and it is the one that costs: see the note
+  // above `DERIVED_PORT_ORDER` for the seven ports it moved and why a tombstone row would have
+  // been worse than paying for the shift.
+  //
+  // The repository is archived rather than deleted and its images stay published, so this is not a
+  // claim that it never existed — `org/releases/2026.08.1.yaml` and `2026.08.2.yaml` still name
+  // it, correctly, because those are records of releases that happened.
+  assert.equal(REGISTRY.length, 71);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
   assert.equal(counts.get('service'), 26, '22 from 03 §1.1, plus emberkin, foresight, aetherholm and tessera');
-  assert.equal(counts.get('web'), 18, '11 from 03 §1.2, the five 05-user-journeys §1 records, and the two operator consoles');
+  assert.equal(counts.get('web'), 17, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), and the two operator consoles');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 4, '4 library repositories');
   assert.equal(counts.get('assets'), 4, 'brand and the three per-title asset repositories');
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 61);
-  assert.equal(deployableRepos().length, 47, 'services, frontends and operations services');
+  assert.equal(managedRepos().length, 60);
+  assert.equal(deployableRepos().length, 46, 'services, frontends and operations services');
 });
 
 test('names are unique — a duplicate would make one entry unreachable', () => {
@@ -182,12 +193,49 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   // 4126-4136 — the eleven frontends of 03 §1.2, each four higher than the number compose pins.
   'hub-web', 'site', 'admin-web', 'mint-web', 'trade-web', 'worlds-web', 'explorer-web',
   'network-site', 'market-web', 'devportal-web', 'status-web',
-  // 4137-4141 — the five further frontends. `tessera-web` lands on 4141, which is the number
-  // micro-deploy chose for it by hand; that agreement is a coincidence of arithmetic, not a fix.
-  'emberkin-web', 'foresight-web', 'foresight-admin-web', 'aetherholm-web', 'tessera-web',
-  // 4142-4144 — the three operations services of 03 §1.3, nine higher than compose pins them.
+  // 4137-4140 — the further frontends. Four, not five: `foresight-admin-web` was here at 4139
+  // until the P13 fold, and its removal is the one edit this list has ever taken that is neither
+  // an append nor an insertion. See below.
+  'emberkin-web', 'foresight-web', 'aetherholm-web', 'tessera-web',
+  // 4141-4143 — the three operations services of 03 §1.3.
   'lantern', 'beacon', 'faucet',
+  // 4144-4145 — the two operator consoles, appended (registry.ts:305-324).
+  'lantern-web', 'beacon-web',
 ];
+
+/**
+ * ── WHY THIS LIST WAS EDITED RATHER THAN THE REGISTRY RESTORED ────────────────────────────────
+ *
+ * The test below is meant to make a moved port expensive, and it worked: removing
+ * `foresight-admin-web` turned it red and it named the cost one row at a time —
+ *
+ *     port 4139 belonged to 'foresight-admin-web' and now belongs to 'aetherholm-web'
+ *
+ * — with `aetherholm-web`, `tessera-web`, `lantern`, `beacon`, `faucet`, `lantern-web` and
+ * `beacon-web` each deriving one lower than before. This list was then updated, which is the thing
+ * the comment above forbids doing casually, so the reasoning is recorded here rather than in a
+ * commit message:
+ *
+ *   1. **The repository is gone, not renamed.** The Foresight operator panel folded into
+ *      `micro-admin-web` at P13 as `/foresight`, and `micro-foresight-admin-web` is archived. A
+ *      registry that still named it would claim the estate deploys a console it does not build.
+ *
+ *   2. **A tombstone row is worse than the shift.** Holding index 39 requires `deployable: true`,
+ *      because `deployableRepos()` is what position is counted in — and that list is also what
+ *      `cfctl release` writes a manifest from and what `--verify` pulls. The tombstone would pin
+ *      a GHCR tag for a repository that no longer publishes one.
+ *
+ *   3. **The shift was PAID, not absorbed.** micro-deploy's `docker-compose.estate.yml` and
+ *      `scripts/estate-verify.sh` moved their pins in the same change, and `web-check.py` there
+ *      compares both against this derivation on every run — so the agreement is verified rather
+ *      than asserted here. That script had itself been vacuous (its regex predated the
+ *      `${CF_PORT_BASE:-4}` templating and matched none of the forty-four pins, reporting "all 0
+ *      compose pins ... match"); it was fixed in the same change, which is the only reason this
+ *      shift could be shown to have been paid at all.
+ *
+ * APPENDING IS STILL THE ONLY FREE EDIT. Deletion is not free, and this list going red is what
+ * made that true rather than merely stated.
+ */
 
 test('no registry change moves a port that already exists; appending is the only free edit', () => {
   const actual = deployableRepos().map((repo) => repo.name);

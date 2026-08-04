@@ -242,7 +242,33 @@ export const REGISTRY: readonly Repo[] = [
   // at all when this entry was written, which is what a registry naming it makes visible.
   web('emberkin-web', '19', 'The Kindred Three.js client, on estate conventions, with the generated art'),
   web('foresight-web', '19', 'Browse, market detail with cited sources, stake, portfolio, claim'),
-  web('foresight-admin-web', '19', 'Operator panel: idea queue, open/close/resolve/void, disputes. Folds into admin-web at P13'),
+  // `foresight-admin-web` was a row here, and P13 happened. Its own blurb named the date —
+  // "Folds into admin-web at P13" — and the panel is now a section inside `micro-admin-web`
+  // (`/foresight`), so there is no repository left to deploy. The GitHub repository is ARCHIVED
+  // rather than deleted and its published images stay in the registry, because deleting a
+  // published tag breaks anyone who pinned it.
+  //
+  // ── REMOVING IT MOVED SEVEN PORTS, AND THAT WAS THE DECISION RATHER THAN THE ACCIDENT ───────
+  //
+  // The row was at index 39, so `aetherholm-web`, `tessera-web`, `lantern`, `beacon`, `faucet`,
+  // `lantern-web` and `beacon-web` each derive one lower than before — 4140→4139 down to
+  // 4146→4145. `DERIVED_PORT_ORDER` in test/cfctl.test.ts went red naming every one, which is
+  // exactly what that test is for, and it was updated as a stated decision rather than to make
+  // red go green. micro-deploy's compose pins and `estate-verify.sh` moved in the same change,
+  // and `scripts/web-check.py` there proves the two agree.
+  //
+  // ── THE ALTERNATIVE WAS A TOMBSTONE ROW, AND IT IS WORSE ────────────────────────────────────
+  //
+  // A row kept in place purely to hold index 39 would have to stay `deployable: true` to occupy a
+  // port at all, because `deployableRepos()` is what the position is counted in. But that list is
+  // also what `cfctl release` builds a manifest from and what `--verify` pulls — so the tombstone
+  // would put `ghcr.io/<org>/micro-foresight-admin-web` into the next release, for a repository
+  // that no longer builds an image. `assets()` above states the same rule for the same reason:
+  // "a release manifest that named one would be pinning a tag that cannot be pulled."
+  //
+  // So the choice was between seven derived numbers moving, which a test names and a script
+  // verifies, and a release manifest pinning a retired console, which nothing would catch until a
+  // deploy. Seven numbers moved.
   web('aetherholm-web', '20', 'Archipelago map, city view, fleet control, battle reports, chronicle browser'),
   web('tessera-web', '23', 'Isometric renderer, build and place tools, the Kiln, the ward map, Workshop pages'),
 

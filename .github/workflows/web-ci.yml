@@ -67,7 +67,7 @@ jobs:
     #
     # THIS IS WHY THIS WORKFLOW HAD NO CALLERS AT ALL. Every frontend in the estate — hub-web, site,
     # mint-web, market-web, trade-web, worlds-web, emberkin-web, explorer-web, devportal-web,
-    # network-site, admin-web, foresight-web, foresight-admin-web and web-template — consumes the
+    # network-site, admin-web, foresight-web and web-template — consumes the
     # design system as `link:../ui/packages/ui`, and this workflow did ONE checkout and then
     # `pnpm install --frozen-lockfile`. A `link:` specifier is a symlink to a path: with no sibling
     # on disk it installs as a DANGLING link that resolves to nothing, so `Install` passes and
