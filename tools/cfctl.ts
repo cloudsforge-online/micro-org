@@ -495,6 +495,27 @@ function workflowFiles(root: string): string[] {
     .map((file) => path.join(dir, file));
 }
 
+/**
+ * What GHCR's token endpoint just said about a package.
+ *
+ * THE WHOLE ANSWER IS HERE, which is not obvious and cost this check its correctness twice. A
+ * registry client that wants to read anonymously asks `/token` first; GHCR replies with a bearer
+ * token for a package it will let the public read, and with
+ * `{"errors":[{"code":"DENIED", ...}]}` for one it will not — which covers BOTH a private package
+ * and a package that has never been published, and those are exactly the two cases the visibility
+ * warning exists to raise. Treating a DENIED body as "cannot tell" is how the check went from
+ * warning about all 45 deployables to warning about none of them.
+ *
+ * Pure, and exported, so the three answers can be tested against fixtures. The version of this
+ * logic that lived inline was only ever exercised by a live network call, and a check whose only
+ * test is the internet is a check that is silently wrong between outages.
+ */
+export function readGhcrTokenAnswer(body: string): { readonly token?: string; readonly denied: boolean } {
+  const token = /"token"\s*:\s*"([^"]+)"/.exec(body)?.[1];
+  if (token) return { token, denied: false };
+  return { denied: /"code"\s*:\s*"DENIED"/.test(body) || /"errors"\s*:/.test(body) };
+}
+
 function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' {
   // The 403 trap this check exists for: a new repository's package inherits the repository's
   // visibility, and the deploy path fails at PULL time rather than at publish time.
@@ -523,10 +544,10 @@ function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' 
     `https://ghcr.io/token?service=ghcr.io&scope=repository:${pkgPath}:pull`,
   ]);
   if (!tokenResult.ok) return 'unknown';
-  // The token endpoint answers 200 with a JSON body for anyone; what distinguishes public from
-  // private is whether the token it hands back can then READ the package.
-  const token = /"token"\s*:\s*"([^"]+)"/.exec(tokenResult.out)?.[1];
-  if (!token) return 'unknown';
+
+  const answer = readGhcrTokenAnswer(tokenResult.out);
+  if (answer.denied) return 'private-or-absent';
+  if (!answer.token) return 'unknown';
 
   const result = run('curl', [
     '-s',
@@ -537,7 +558,7 @@ function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' 
     '-w',
     '%{http_code}',
     '-H',
-    `Authorization: Bearer ${token}`,
+    `Authorization: Bearer ${answer.token}`,
     `https://ghcr.io/v2/${pkgPath}/tags/list`,
   ]);
   if (!result.ok) return 'unknown';

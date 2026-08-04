@@ -7,6 +7,7 @@ import {
   inspect,
   isOrgRemote,
   microRoot,
+  readGhcrTokenAnswer,
   parseManifest,
   portFor,
   renderManifest,
@@ -220,6 +221,32 @@ test('a directory beside the estate that no row names is reported, not skipped',
   assert.deepEqual(unregisteredSiblings(root, ['ledger', 'identity']), ['somebody-elses-repo']);
   assert.deepEqual(unregisteredSiblings(root, ['ledger', 'identity', 'somebody-elses-repo']), []);
   assert.deepEqual(unregisteredSiblings(path.join(root, 'nowhere'), []), [], 'no tree is not a finding');
+});
+
+test("GHCR's token endpoint answer is read the way GHCR means it", () => {
+  // THE FIXTURES ARE REAL RESPONSES, captured from ghcr.io rather than imagined, because both
+  // times this check was wrong it was wrong about what the registry actually says.
+  //
+  // A package the public may read: a bearer token comes back.
+  const published = readGhcrTokenAnswer(
+    '{"token":"djE6Y2xvdWRzZm9yZ2Utb25saW5lL21pY3JvLXNlcnZpY2UtdGVtcGxhdGU6MTc4NTgzOTk0Njk4OTA3Mjc3Mw=="}',
+  );
+  assert.equal(published.denied, false);
+  assert.match(published.token ?? '', /^djE6/);
+
+  // A package that is private, or that has never been published — GHCR does not distinguish, and
+  // neither does the warning, because the operator's next step is the same either way. DENIED is
+  // an ANSWER: reading it as "cannot tell" silenced the warning for all 45 deployables at once.
+  const denied = readGhcrTokenAnswer('{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}');
+  assert.equal(denied.denied, true);
+  assert.equal(denied.token, undefined);
+
+  // Something neither shape — a proxy's error page, a truncated body. Not a finding: reporting a
+  // package as private on the strength of an unparseable answer is the false alarm this check has
+  // already been guilty of.
+  const garbage = readGhcrTokenAnswer('<html>502 Bad Gateway</html>');
+  assert.equal(garbage.denied, false);
+  assert.equal(garbage.token, undefined);
 });
 
 test('every deployable resolves to a GHCR image under the org', () => {
