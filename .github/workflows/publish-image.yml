@@ -292,6 +292,16 @@ jobs:
           file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
           build-contexts: ${{ steps.tags.outputs.contexts }}
+          # THE PUBLISHED IMAGE MUST KNOW WHICH RELEASE IT IS. The frontends bake this into a
+          # `cf-release` meta tag at build time (`ARG RELEASE=dev`, substituted into index.html —
+          # e.g. `status-web/Dockerfile:45-46`), and every gate build passes it
+          # (`status-web/.github/workflows/ci.yml:219`). This workflow did not, so the first images
+          # ever published by this estate all identified themselves as "dev" — leaving no way to
+          # tell a deployed frontend which build it came from, which is exactly the question a bug
+          # report asks. Passed here rather than as a caller input so no repo has to remember it,
+          # and it is harmless to a Dockerfile with no such ARG.
+          build-args: |
+            RELEASE=${{ github.sha }}
           push: true
           tags: |
             ${{ steps.tags.outputs.image }}:sha-${{ github.sha }}
