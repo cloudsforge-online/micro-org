@@ -214,6 +214,27 @@ jobs:
 
           echo "image=$ref"        >> "$GITHUB_OUTPUT"
           echo "version=$version"  >> "$GITHUB_OUTPUT"
+
+          # ONLY THE CONTEXTS THIS KIND ACTUALLY CHECKED OUT.
+          #
+          # service-ci.yml can name a context its Dockerfile never reads and pay nothing, because
+          # the directory is always there. Here it is not: a service checks out runtime-ctx and
+          # contracts-ctx, a frontend checks out ui-ctx, and buildx STATS EVERY NAMED CONTEXT
+          # before it looks at the Dockerfile — so naming all three failed the first real run with
+          # `failed to get build context uipkg: no such file or directory`
+          # (micro-service-template run 30900945417). Named per kind, so a missing directory means
+          # a missing checkout rather than a context nobody wanted.
+          {
+            echo 'contexts<<CONTEXTS_EOF'
+            if [ "${{ inputs.kind }}" = "service" ]; then
+              echo "runtimepkgs=${GITHUB_WORKSPACE}/runtime-ctx"
+              echo "contractspkgs=${GITHUB_WORKSPACE}/contracts-ctx"
+            else
+              echo "uipkg=${GITHUB_WORKSPACE}/ui-ctx"
+            fi
+            echo 'CONTEXTS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
           echo "ok: ${ref} @ ${version} (${GITHUB_SHA})"
 
       # ── The version tag is immutable ──────────────────────────────────────────────────────────
@@ -270,10 +291,7 @@ jobs:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
-          build-contexts: |
-            runtimepkgs=${{ github.workspace }}/runtime-ctx
-            contractspkgs=${{ github.workspace }}/contracts-ctx
-            uipkg=${{ github.workspace }}/ui-ctx
+          build-contexts: ${{ steps.tags.outputs.contexts }}
           push: true
           tags: |
             ${{ steps.tags.outputs.image }}:sha-${{ github.sha }}
