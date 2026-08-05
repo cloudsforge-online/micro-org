@@ -89,6 +89,13 @@ on:
           Use it for anything @cloudsforge/secrets guards — the seven aliases of the estate's event
           bus HMAC key — because that guard has no CI exemption on purpose (micro-org #142). A
           throwaway string that clears a length check is exactly what it refuses.
+
+          `KEY=@credential` mints a `cfsc_` + 43-character base64url SERVICE CREDENTIAL, for a slot
+          held to `assertServiceCredential`. `KEY=@token` mints a JWT SHAPE, for the slots that
+          still read a ten-minute minted token and present it verbatim as a Bearer. Three
+          directives because there are three shapes, and THE VARIABLE'S NAME DOES NOT SETTLE WHICH:
+          measured on the live estate, `SETTLEMENT_SERVICE_TOKEN` holds a `cfsc_` credential while
+          `MARKET_SERVICE_TOKEN` holds a JWT. Read the service's `env.ts` and match its guard.
         required: false
         default: ''
         type: string
@@ -1291,6 +1298,30 @@ jobs:
               *=@credential)
                 cred=$(openssl rand -base64 33 | tr '+/' '-_' | tr -d '=\n' | cut -c1-43)
                 line="${line%@credential}cfsc_${cred}" ;;
+              # `KEY=@token` mints a MINTED-TOKEN shape: the two base64url segments and the dot
+              # that `/^ey[A-Za-z0-9_-]*\./` matches. It is not signed and nothing can verify it.
+              #
+              # It exists for the slots that read a ten-minute JWT and present it verbatim as a
+              # Bearer — `emberkin/src/env.ts` is the one that forced it, and market, trade,
+              # foresight and faucet hold the same shape. Neither `@generate` nor `@credential`
+              # can serve them: a base64 key has no dot and a `cfsc_` credential is precisely the
+              # wrong answer, because handing one to a slot that presents it verbatim earns a 401
+              # with nothing in either log naming the cause.
+              #
+              # THIS IS NOT A HOLE IN THE GUARD, AND THE DISTINCTION IS WORTH STATING. The smoke
+              # test dials no upstream — /livez needs none — so a token that cannot authenticate
+              # proves exactly what CI needs proved: that the service boots on a value of the right
+              # SHAPE. What the boot guard refuses, and what CI must therefore never write here, is
+              # a TYPED placeholder like `estate-placeholder-token-0000000000000000`, which is what
+              # the compose file falls back to when the bootstrap has not run.
+              #
+              # The signature segment is generated per run for the same reason `@generate` is: no
+              # repository should hold a literal that looks like key material.
+              *=@token)
+                jwt_h=$(printf '{"alg":"EdDSA","typ":"JWT"}' | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+                jwt_p=$(printf '{"sub":"ci","iss":"ci","exp":0}' | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+                jwt_s=$(openssl rand -base64 33 | tr '+/' '-_' | tr -d '=\n' | cut -c1-43)
+                line="${line%@token}${jwt_h}.${jwt_p}.${jwt_s}" ;;
             esac
             env_args+=(-e "$line")
           done <<< "$SMOKE_ENV"
