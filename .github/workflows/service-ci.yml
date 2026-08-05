@@ -1273,6 +1273,24 @@ jobs:
             [ -z "$line" ] && continue
             case "$line" in
               *=@generate) line="${line%@generate}$(openssl rand -base64 48)" ;;
+              # `KEY=@credential` mints a SERVICE CREDENTIAL shape: `cfsc_` + 43 base64url
+              # characters, which is 32 bytes of key material and exactly the floor
+              # `assertServiceCredential` enforces.
+              #
+              # It exists because `@generate` cannot serve this class. A credential is base64url
+              # and carries a `cfsc_` prefix, so a base64 value fails the prefix check, and a
+              # service that genuinely READS a credential — admin-api presents one as a Bearer on
+              # every ledger call — has nothing it can put in `smoke-env`. The gap was being filled
+              # with a literal `cfsc_ci-only-NOT-a-real-credential-…`, which only worked because
+              # `assertServiceCredential` had no marker check. Closing that hole (secrets 1.2.0)
+              # correctly refuses the literal, so the mechanism has to exist instead.
+              #
+              # `tr '+/' '-_'` converts the base64 alphabet to base64url, which is what identity's
+              # minter emits — and it is why a per-run value here sometimes contains a hyphen and
+              # sometimes does not, exactly like the two live estates.
+              *=@credential)
+                cred=$(openssl rand -base64 33 | tr '+/' '-_' | tr -d '=\n' | cut -c1-43)
+                line="${line%@credential}cfsc_${cred}" ;;
             esac
             env_args+=(-e "$line")
           done <<< "$SMOKE_ENV"
