@@ -1,7 +1,41 @@
 # micro-org
 
 The organisation machinery for the CloudsForge polyrepo: reusable workflows, the contract
-compatibility checker, `cfctl`, the release manifests and the Renovate preset.
+compatibility checker, `cfctl`, the release manifests, the Renovate preset — and **the estate's
+bug tracker**.
+
+---
+
+## Every defect is recorded here
+
+**[`micro-org/issues`](https://github.com/cloudsforge-online/micro-org/issues) is the tracker for
+the whole estate.** One central list, not issues scattered across sixty-nine repositories; each
+issue names its owning repo in the body.
+
+**File an issue when a defect is FOUND, not when it is fixed.** One opened and closed within the
+hour is still the record that it existed — and that record is the point. In a single programme run
+this estate found a chain that could not load its own data past two months, deposits that had never
+once worked, and a custody master secret published in a public repository. All were reported in
+conversation, fixed, and would have left no durable trace of what had been wrong or what was still
+open.
+
+Four rules, each of which exists because it was got wrong first:
+
+1. **Lead with the user-visible symptom**, then the mechanism. Someone skimming should see what
+   broke for a person, not an implementation detail.
+2. **Cite `path:line`.** A tracker entry that is wrong is worse than none. Several long-standing
+   "facts" in this estate turned out stale the moment somebody checked them.
+3. **Keep the status current.** A list of everything ever wrong, with no state, is an archive
+   rather than a tracker.
+4. **Do not inflate.** Many defects here are caught before production, and more often by another
+   check than by a user — say which. A tracker that makes a well-tested system look like a burning
+   one misrepresents it just as badly as one that hides problems.
+
+And when a defect existed because **a check could not fail** — a skip reported as a pass, a regex
+matching nothing, a guard on a path nobody ran — say so. That pattern accounted for at least nine
+separate defects, and it is more actionable than any single entry on the list.
+
+---
 
 **This repository is the Phase 2 gate.** AD-01 chose one repository per deployable — forty-six
 repositories in 03 §1, seventy in the organisation today — and stated the cost of that choice
