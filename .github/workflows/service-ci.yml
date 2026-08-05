@@ -82,8 +82,13 @@ on:
           and the service container. A service whose `env.ts` validates its configuration at import
           — every service in this estate does — exits before it serves `/livez` unless the variables
           it declares are present, so the smoke test could never boot it on the database alone. These
-          are CI-only non-secrets: a throwaway token that clears a length check, a JWKS URL that is
-          never dialled because `/livez` needs no identity. Never a real credential.
+          are CI-only non-secrets: a throwaway token, a JWKS URL that is never dialled because
+          `/livez` needs no identity. Never a real credential.
+
+          `KEY=@generate` asks for a fresh `openssl rand -base64 48`, per run, thrown away after.
+          Use it for anything @cloudsforge/secrets guards — the seven aliases of the estate's event
+          bus HMAC key — because that guard has no CI exemption on purpose (micro-org #142). A
+          throwaway string that clears a length check is exactly what it refuses.
         required: false
         default: ''
         type: string
@@ -1246,9 +1251,30 @@ jobs:
           fi
 
           # The service's declared configuration, one `-e` per non-empty line.
+          #
+          # `KEY=@generate` is replaced with a fresh `openssl rand -base64 48`, and it exists
+          # because of micro-org #142. Every service now runs @cloudsforge/secrets at boot, which
+          # refuses a value that is not shaped like a generated secret — no NODE_ENV exemption and
+          # no CI branch, deliberately, because an escape hatch is reached for in exactly the hurry
+          # that produced the defect. That left 23 workflows setting
+          # `OUTBOX_SIGNING_SECRET=ci-only-not-a-real-secret-…`, which the guard refuses.
+          #
+          # The answer is not to weaken the guard for CI. CI does not need a WEAK secret, it needs
+          # A secret — nothing in the smoke test verifies a signature against anything else — so it
+          # generates a real one per run and throws it away. That is honest in a way the literal
+          # never was: the literal claimed to be a secret and was not, which is the same category
+          # of lie as the placeholder in the compose file.
+          #
+          # Generated HERE rather than committed as a high-entropy literal, so no repository ever
+          # holds a string that looks like a key: a per-run value cannot be mistaken for one, cannot
+          # be copied into a deploy, and leaves nothing for a future reader to wonder about.
           env_args=()
           while IFS= read -r line; do
-            [ -n "$line" ] && env_args+=(-e "$line")
+            [ -z "$line" ] && continue
+            case "$line" in
+              *=@generate) line="${line%@generate}$(openssl rand -base64 48)" ;;
+            esac
+            env_args+=(-e "$line")
           done <<< "$SMOKE_ENV"
           env_args+=(-e "PORT=${PORT}")
 
