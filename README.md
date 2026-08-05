@@ -141,7 +141,7 @@ is more useful than pretending otherwise.
 | 3 | Every cross-service call is HTTP with a scoped service token | **Not mechanically checkable.** See below |
 | 4 | `/livez`, `/readyz`, `/metrics` | `service-ci.yml` |
 | 5 | State changes write an outbox row in the same transaction | **Partially.** See below |
-| 6 | Services storing `user_id` subscribe to `identity.user.deleted` | Beacon conformance (AD-04), not CI |
+| 6 | Services storing `user_id` subscribe to `identity.user.deleted` | `deploy/scripts/check-erasure-register.py`, then `deploy/scripts/erasure-drill.sh`. See below |
 | 7 | Migrations are versioned files under an advisory lock | Template shape; a lint is possible and is not written yet |
 | 8 | No `setInterval` doing domain work | `service-ci.yml`, with a documented per-line escape hatch |
 | 9 | Secrets are per-service; no `env_file` fan-out | `service-ci.yml` |
@@ -158,6 +158,29 @@ the service ever writes to it. It cannot see whether *this particular* state cha
 because "others care about it" is a product judgement. The mechanical half belongs in the
 template; the rest is Beacon: a consumer-driven expectation that an event arrives is a test that
 fails when the outbox row was not written.
+
+**Rule 6 said "Beacon conformance (AD-04), not CI", and in practice that meant nobody checked
+it.** The rule held for two services out of sixteen. Fourteen more stored a reference to a person
+with no subscriber at all, and six had handler code no event could ever reach — so a deletion
+request succeeded in `identity`, reported success to the user, and left their data across the
+estate, with every individual component reporting itself healthy the whole time. A rule that lives
+in a row of this table is enforced by whoever last read the table.
+
+It is now two mechanisms reading one file, `deploy/erasure/register.psv`:
+
+- **`deploy/scripts/check-erasure-register.py`** scans every service's schema for columns naming a
+  person and fails on any service that is neither in the register nor exempt for a reason about
+  the *data*. "Not done yet" is not a reason it accepts; that is what a tracker issue is for.
+- **`deploy/scripts/erasure-drill.sh`** creates an account, gives it something to lose in every
+  registered service, deletes it through the real route, and asserts per service that no column in
+  that database still names them. The same file seeds the subscriptions at deploy, so a registered
+  service cannot ship unsubscribed and a subscription that erases nothing fails rather than passing.
+
+The drill exists because the alternative does not work. Every handler it caught being wrong had
+passing unit tests: three services rejected every real deletion because their uuid pattern allowed
+versions 1–5 while `identity` mints v7 — and their fixtures were v4, so both halves of each test
+agreed with each other and neither agreed with the producer. That is not a gap a better unit test
+closes. It is what "test the seam, not the mock" means when it is expensive.
 
 ## What this repository is not
 
