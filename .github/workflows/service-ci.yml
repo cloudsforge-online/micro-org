@@ -982,7 +982,7 @@ jobs:
           # The @cloudsforge scope is for published contracts and runtime libraries only. This
           # list is the same one in micro-org tools/registry.ts (ALLOWED_SCOPED_PACKAGES); cfctl
           # doctor checks package.json against it, and this checks the imports.
-          allowed='contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|policy-client|ui|ui-charts|sdk|cli|hearth-node'
+          allowed='contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|secrets|policy-client|ui|ui-charts|sdk|cli|hearth-node'
           # Quoted only. An unquoted @cloudsforge/x in prose is a comment naming a package, and a
           # check that cannot tell those apart is a check people learn to work around by
           # rewording comments.
