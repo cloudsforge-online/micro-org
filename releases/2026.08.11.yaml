@@ -1,0 +1,342 @@
+# CloudsForge release manifest.
+#
+# WHAT THIS RELEASE IS: the SECOND half of micro-org #229. 2026.08.10 got `@cloudsforge/secrets`
+# into fifteen images. It also recorded, in its own header, that ten more consumers were "ALREADY
+# correctly guarded in production ... their `src/env.ts` is byte-identical to the copy inside their
+# running image". That claim was re-checked against the running containers before this release was
+# cut, and it is WRONG for six of the ten. Measured, not argued -- `docker exec <container> cat
+# /app/src/env.ts` diffed against the repository:
+#
+#     activity aetherholm devplatform policy    env.ts byte-identical      <- the claim holds
+#     billing mint nda pricing studio emberkin  env.ts DIFFERS             <- the claim does not
+#
+# The four the claim holds for are STILL untouched here, and for the reason the old header gave:
+# secrets 1.0.0 -> 1.2.0 is a purely additive diff (`263a264,506`, zero changed or deleted lines,
+# re-measured), and those four call only `assertGeneratedSecret`, which is byte-identical across
+# the two versions. Restarting a healthy service to ship nothing is not a fix.
+#
+# The six the claim does NOT hold for are the release. What was actually in their running images:
+#
+#     billing 1.1.0   env.ts calls assertServiceCredential 0 times; the repository calls it 3
+#     mint    1.2.0   env.ts calls assertServiceCredential 0 times; the repository calls it 3
+#     nda     1.1.0   env.ts calls assertServiceCredential 0 times; the repository calls it 2
+#     studio  1.2.0   env.ts calls assertOpaqueSecret      0 times; the repository calls it
+#     pricing 1.2.0   env.ts drifted from the repository
+#     emberkin 1.0.0  NO @cloudsforge/secrets IN THE IMAGE AT ALL
+#
+# So `billing`, `mint` and `nda` each hold a live `cfsc_` credential and ran NO credential guard --
+# the shape #229 names: a protection everyone believed was in force, which was not, and therefore
+# worse than no guard because nobody was looking.
+#
+# NOTHING HERE WAS REBUILT except ledger. Every one of those six images ALREADY EXISTED in GHCR,
+# built from the commit on main, and had simply never been pinned -- the previous release declined
+# to ship them on the strength of the claim above. Each was verified two ways before it was named
+# here: the tag pulls, and its digest is identical to the `sha-<HEAD>` tag of the same repository,
+# so the image really was built from the commit named beside it and not from somebody's tree.
+#
+# LEDGER IS THE ONE REAL CHANGE, and it is #229 in its second shape: a guard that IS in the image
+# and is the WRONG VERSION OF ITSELF. ledger 1.2.1's env.ts is byte-identical to the repository and
+# does run a credential guard -- its OWN private copy, the one `@cloudsforge/secrets` was promoted
+# from. That copy checks the JWT shape, the `cfsc_` prefix, the 32-byte floor and the entropy floor,
+# and NOT the placeholder markers, so `cfsc_ci-only-NOT-a-real-credential-9xKq2mZ7vB` cleared all
+# four of its checks. micro-runtime f01fe52 closed that hole in the shared copy; ledger never
+# inherited the fix because ledger was not calling the shared copy. 1.2.2 deletes the private copy,
+# calls the shared one, and pins the regression as a test.
+#
+# THE HYPHEN IS LIVE IN BOTH DIRECTIONS and no estate was inferred from the other. A credential body
+# is base64url, and on these two networks `mint` carries a hyphen on mainnet and none on testnet
+# while `nda` is the reverse -- so a "no hyphens" rule passes one estate and crash-loops the other,
+# whichever way it is written. Every probe below was run separately per network.
+#
+# PREFLIGHT, and it is the whole of the evidence: every service and migrator on BOTH estates had its
+# OWN `loadEnv` driven, inside the image THIS manifest pins, against the COMPOSE-RESOLVED
+# environment the new container will receive -- not the running container's. Plus a CANARY of
+# poisoned boots on the same images and the same environments, because a preflight that finds
+# nothing is only meaningful if it can also find something.
+#
+# `EMBERKIN_SERVICE_TOKEN` is a 698-character JWT presented verbatim as a Bearer and is guarded by
+# JWT SHAPE with deliberately no expiry check (#228). An expiry check there would crash-loop the
+# service on every restart. It is not a defect and it was not "fixed".
+#
+# `indexer` is untouched on purpose: Litecoin sync is still ~120,000 blocks from its tip.
+# `identity` and `notify` are untouched: another agent holds password-reset work in flight.
+version: "2026.08.11"
+generated: "2026-08-06T00:00:00.000Z"
+generator: hand-cut; images verified against GHCR by tag and by sha-<HEAD> digest, then preflighted
+services:
+  - name: identity
+    repo: micro-identity
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-identity
+    tag: "1.3.0"
+    commit: "3dd145ec9d19d8ca8c872e940f881455fd710a24"
+  - name: policy
+    repo: micro-policy
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-policy
+    tag: "1.1.0"
+    commit: "169dda3f041680f91b1068a411dd87a5d467d112"
+  - name: ledger
+    repo: micro-ledger
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-ledger
+    tag: "1.2.2"
+    commit: "ca389d69c9becec0e530e99fa5a8a39674ae17d2"
+  - name: wallet
+    repo: micro-wallet
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-wallet
+    tag: "1.4.0"
+    commit: "41959fba5f96fb51dad0b6119a25e946d427445e"
+  - name: settlement
+    repo: micro-settlement
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-settlement
+    tag: "1.2.0"
+    commit: "e6c398898a64fd8464f9bf4c9966e6d7efbf0d1c"
+  - name: pricing
+    repo: micro-pricing
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-pricing
+    tag: "1.3.0"
+    commit: "e786927c950e6a1020c0393e0d12508cdea27594"
+  - name: billing
+    repo: micro-billing
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-billing
+    tag: "1.2.0"
+    commit: "a9b144ad69b3f11ed2ddc80f52dedc1a2c0a0778"
+  - name: custody
+    repo: micro-custody
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-custody
+    tag: "1.2.0"
+    commit: "524b923d86aed7ce267b87f782a6f37c2b53a8ec"
+  - name: indexer
+    repo: micro-indexer
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-indexer
+    tag: "1.1.0"
+    commit: "ef45de5441ba2fbc7abab941972cf73ab49f8485"
+  - name: activity
+    repo: micro-activity
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-activity
+    tag: "1.1.0"
+    commit: "b9ea2b33c1135908623a5bc7734e1553e84605b7"
+  - name: notify
+    repo: micro-notify
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-notify
+    tag: "1.2.0"
+    commit: "3c9a9a7f28cae89a087115377394ebd453542241"
+  - name: studio
+    repo: micro-studio
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-studio
+    tag: "1.3.0"
+    commit: "f2db7c0540952153f1740dac87592a26a9d03b03"
+  - name: mint
+    repo: micro-mint
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-mint
+    tag: "1.3.0"
+    commit: "db5b2c2e6f8ad06b5013a84ad63b6340eba32980"
+  - name: market
+    repo: micro-market
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-market
+    tag: "1.2.0"
+    commit: "844d33b8cb05a76561c2fb5c5dfb2cb85b318fc7"
+  - name: trade
+    repo: micro-trade
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-trade
+    tag: "1.0.0"
+    commit: "a51214662a40cf9d3b0c1a7d5715dceae60cb5f0"
+  - name: worlds
+    repo: micro-worlds
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-worlds
+    tag: "1.1.0"
+    commit: "0bb291db2941ef314f7cab814da29d1d25ee3945"
+  - name: nda
+    repo: micro-nda
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-nda
+    tag: "1.2.0"
+    commit: "8267d877a9ceb6ddef86fd85b688f6b1b81d7962"
+  - name: community
+    repo: micro-community
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-community
+    tag: "1.2.0"
+    commit: "2743a424734adbb31bf0cedf850b59ea5056f4ac"
+  - name: devplatform
+    repo: micro-devplatform
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-devplatform
+    tag: "1.1.0"
+    commit: "20b096ff6b6ab901f2e6c0e17806a4d432e8458f"
+  - name: hub-api
+    repo: micro-hub-api
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-hub-api
+    tag: "1.1.0"
+    commit: "404907c4d471f7be09e2750c0e74c19623a16426"
+  - name: admin-api
+    repo: micro-admin-api
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-admin-api
+    tag: "1.3.0"
+    commit: "085dc523315e33d9ead76109556734fe49764397"
+  - name: analytics
+    repo: micro-analytics
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-analytics
+    tag: "1.2.0"
+    commit: "f1d2d76f8c8f7a4c1953171cd1eb9b5ffe61446b"
+  - name: emberkin
+    repo: micro-emberkin
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-emberkin
+    tag: "1.1.0"
+    commit: "56b09aa353b893223384f055546dcbf23f680f98"
+  - name: foresight
+    repo: micro-foresight
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-foresight
+    tag: "1.3.0"
+    commit: "57ab8ac9e5fd66c5d9236717e7f7843a70766141"
+  - name: aetherholm
+    repo: micro-aetherholm
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-aetherholm
+    tag: "1.1.0"
+    commit: "07c15a7429ccd967f8264ab50289873f3a66ed09"
+  - name: tessera
+    repo: micro-tessera
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-tessera
+    tag: "1.2.0"
+    commit: "feae44c749ad3b37d76fe7e3accafab2c9e10990"
+  - name: hub-web
+    repo: micro-hub-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-hub-web
+    tag: "1.1.0"
+    commit: "c7f2c8494e8f52e8efbf3ba7650da9475a16f0d9"
+  - name: site
+    repo: micro-site
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-site
+    tag: "1.0.2"
+    commit: "db53e73799f440cfb4f36dae64ac431945bbf1df"
+  - name: admin-web
+    repo: micro-admin-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-admin-web
+    tag: "1.2.0"
+    commit: "28fb33addae6352e18d0b45b7bf7785b529b2c29"
+  - name: mint-web
+    repo: micro-mint-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-mint-web
+    tag: "1.1.0"
+    commit: "288d5d5aba697c71c73c42aa53998d1797e38adb"
+  - name: trade-web
+    repo: micro-trade-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-trade-web
+    tag: "1.0.0"
+    commit: "3813a34c4a32bc77a19a646ddd992a28c4b7a7f2"
+  - name: worlds-web
+    repo: micro-worlds-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-worlds-web
+    tag: "1.0.1"
+    commit: "6be91299cacd5dab1e4a2d031c7e8aa525228d99"
+  - name: explorer-web
+    repo: micro-explorer-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-explorer-web
+    tag: "1.0.0"
+    commit: "79a84577610c1cb490353a5bdbbc5cb3405fbdf7"
+  - name: network-site
+    repo: micro-network-site
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-network-site
+    tag: "1.0.1"
+    commit: "003d88417833e37fa767aef8c374ffc6b329a0b5"
+  - name: market-web
+    repo: micro-market-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-market-web
+    tag: "1.1.0"
+    commit: "e59e68d4eb61399ab5a29ba38c8fce6dda9861d6"
+  - name: devportal-web
+    repo: micro-devportal-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-devportal-web
+    tag: "1.0.0"
+    commit: "2ab1b2cc82215e917a86984d82892e77a866f6f1"
+  - name: status-web
+    repo: micro-status-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-status-web
+    tag: "1.0.0"
+    commit: "0f3c22bda85b104a86c6d47a47b02ef7e0855dbe"
+  - name: emberkin-web
+    repo: micro-emberkin-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-emberkin-web
+    tag: "1.0.0"
+    commit: "87ea6a4bb726286f6f26598fe1d87a1f114bd916"
+  - name: foresight-web
+    repo: micro-foresight-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-foresight-web
+    tag: "1.2.0"
+    commit: "7f56719fd1c59d8b3aaf11e2b2fde55e82972b6b"
+  - name: aetherholm-web
+    repo: micro-aetherholm-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-aetherholm-web
+    tag: "1.0.0"
+    commit: "4ebccbd5fd40be03a421c967aa162ab3df675416"
+  - name: tessera-web
+    repo: micro-tessera-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-tessera-web
+    tag: "1.0.0"
+    commit: "e185db895a8c4dada91e69c151a922f42c2924b3"
+  - name: lantern
+    repo: micro-lantern
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-lantern
+    tag: "1.1.0"
+    commit: "6278a4e9c2188f7047b5163323525b663fe5e217"
+  - name: beacon
+    repo: micro-beacon
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-beacon
+    tag: "1.1.0"
+    commit: "0411694c2fc9119596e7de9b845f7df6d9356302"
+  - name: faucet
+    repo: micro-faucet
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-faucet
+    tag: "1.1.0"
+    commit: "c7b37f83d86a94fc30968e652ad10e807c07af5b"
+  - name: lantern-web
+    repo: micro-lantern-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-lantern-web
+    tag: "1.0.0"
+    commit: "601d66b21c14517899cd94a58c6e5b584f36eb7d"
+  - name: beacon-web
+    repo: micro-beacon-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-beacon-web
+    tag: "1.0.0"
+    commit: "570508af21e7f7e3eaf9a8ee7bdafcbd96948d3e"
