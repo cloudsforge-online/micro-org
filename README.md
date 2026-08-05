@@ -32,8 +32,52 @@ Four rules, each of which exists because it was got wrong first:
    one misrepresents it just as badly as one that hides problems.
 
 And when a defect existed because **a check could not fail** — a skip reported as a pass, a regex
-matching nothing, a guard on a path nobody ran — say so. That pattern accounted for at least nine
-separate defects, and it is more actionable than any single entry on the list.
+matching nothing, a guard on a path nobody ran — say so. That pattern accounts for **twenty-two**
+separate defects, rostered with citations in
+[#38](https://github.com/cloudsforge-online/micro-org/issues/38), and it is more actionable than any
+single entry on the list. This paragraph said "at least nine" for as long as the number was nine;
+a count in prose is a claim, and claims here get re-checked.
+
+### And the other half: no fix is complete until the issue is closed with the evidence
+
+The rule above says when to *open*. This one says when you are *done*, and it is the half that keeps
+being dropped:
+
+> **A fix is not finished when the code is fixed. It is finished when an issue exists for it and is
+> closed with the evidence.**
+
+It applies to **documentation fixes**, to **one-line changes**, and to **defects found and fixed
+inside a single working session** — those last especially, because they are the ones that feel too
+small to be worth writing down and are therefore the ones with no record at all.
+
+This exists because it was got wrong, at scale, on 2026-08-05. Sixty-odd repositories took a day of
+fixes with almost no tracker entry behind them. The commits were there; the record of *what had been
+wrong* was not. Reconstructing it afterwards cost more than filing would have, and cost accuracy
+too — three claims in the reconstruction turned out to be overstated when checked against source,
+including one that was going to be filed as "roughly 15 repositories" and is five.
+
+Four things follow from it:
+
+1. **Cite the fix commit in the issue, and close the issue in the same session.** A commit message
+   is not a tracker entry: it says what was changed, and the useful record is what was *broken*. Nor
+   is a closed issue with no SHA — "fixed" with nothing to check is a claim, and this estate has
+   been wrong about its own state often enough that claims are not evidence.
+2. **Say plainly when a fix is only partly landed**, and leave it open. Six issues here were closed
+   carrying a `status:open` or `status:in-progress` label, so the list disagreed with itself about
+   what was done. A status is a claim like any other and goes stale like any other.
+3. **A documentation fix is a defect fix.** Prose that contradicts the code is a defect that has not
+   caused an outage yet. `ui/packages/ui/src/surfaces.ts` described a hostname consolidation
+   backwards; a bundle believed the comment, pointed at a hostname with no DNS record, and Forge
+   Worlds served a page with no data on it. That comment was "documentation only" right up until it
+   was not. Label it `documentation`, do not inflate it — and file it.
+4. **Note when the OWNER found it by using the product**, rather than any test. That is not a
+   confession, it is the most actionable fact in the entry: it says the gap is in what is checked,
+   not in what was written. The Forge Worlds outage was found that way, with every check in front of
+   it green, because they all asked whether the page answered and none asked whether the data
+   arrived.
+
+The three preceding paragraphs are all reconstruction. **The point of this rule is that there should
+never be another one.**
 
 ---
 
