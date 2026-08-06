@@ -11,7 +11,7 @@ name: estate-ci
 #
 #   `micro-ledger` keys an account on `(subject, asset_code, purpose)` and NOT on its type, so
 #   `ensureAccount` throws `AccountConflictError` when a caller names an existing account with a
-#   different `type` (ledger/src/accounts.ts:125). Every service picks that type independently, in
+#   different `type` (ledger/src/accounts.ts). Every service picks that type independently, in
 #   its own source. When two disagree, whichever posts SECOND in production has EVERY entry refused
 #   — not one entry, every entry, for as long as the disagreement stands. It is invisible to every
 #   suite in the estate because each service tests against its own fake ledger, so nothing in CI has
@@ -42,7 +42,7 @@ name: estate-ci
 #    which repository triggered it. And it makes micro-pricing's CI fail when micro-worlds is
 #    unavailable, or when micro-worlds lands a bad account type: a red that the author of the pricing
 #    pull request cannot fix, cannot explain and did not cause. beacon says what happens next
-#    (beacon/src/estate.ts:15) — "a declared-but-skipping critical journey would refuse every release
+#    (beacon/src/estate.ts) — "a declared-but-skipping critical journey would refuse every release
 #    for ever", and the fix everyone reaches for is to switch the gate off. An estate-wide check that
 #    can block an unrelated author is a check with a one-week life expectancy.
 #
@@ -81,7 +81,7 @@ name: estate-ci
 # ──────────────────────────────────────────────────────────────────────────────────────────────────
 # A JOB THAT SILENTLY REFUSES TO RUN IS A CHECK THAT CANNOT FAIL
 #
-# The sweep refuses a partial checkout (`MIN_SERVICES = 40`, ledgeraccounts.ts:508) precisely because
+# The sweep refuses a partial checkout (`MIN_SERVICES = 40`, ledger/src/accounts.ts) precisely because
 # an empty parent directory would otherwise report "0 disagreements" and pass. This job is built so
 # that the refusal is never how we find out:
 #
@@ -541,7 +541,7 @@ jobs:
       #
       # service-ci.yml proves DEMANDS ⊆ REGISTRY, one repository at a time, and that half is already
       # gated: a gate asking for a scope `@cloudsforge/contracts-auth` does not name fails that
-      # repository's build, because identity refuses to mint an unknown scope (identity/src/env.ts:141).
+      # repository's build, because identity refuses to mint an unknown scope (identity/src/env.ts).
       #
       # REGISTRY ⊆ DEMANDS is the half no repository can reach. From inside micro-pricing, a
       # registered scope nothing in micro-pricing demands is indistinguishable from one micro-wallet
@@ -764,9 +764,9 @@ jobs:
 
       # THE FOURTH INJECTION IS A REGRESSION TEST FOR THE OTHER EMIT SHAPE, AND IT NEEDS TWO PASSES.
       #
-      # Not every emit reaches the bus through a `topic:` property. `ledger/src/entries.ts:439`
+      # Not every emit reaches the bus through a `topic:` property. `ledger/src/entries.ts`
       # writes the outbox row itself, in SQL, and names the topic with the constant declared at
-      # entries.ts:199 — `values (${ENTRY_POSTED}, …)` — for the express reason that a constant is
+      # a constant in the same file — `values (${ENTRY_POSTED}, …)` — for the express reason that a constant is
       # reachable from ledger's own topics.ts and an inlined string is not. The raw-insert path was
       # written to read a LITERAL there and bailed on anything opening `${`, a rule meant for the
       # shared pump's `${event.topic}`. So the estate's most-consumed topic left the emitted set the
@@ -889,7 +889,7 @@ jobs:
       # surface, NOT BY INSPECTION". It is the last open item of the P5 migration exit gate, and it
       # was open because exactly one service of twenty-four asserted it — `custody/src/bodyscan.test.ts`
       # — and a claim about the estate's route surface cannot be made from one repository. The only
-      # estate-wide key check that existed before this is `secret-hygiene.yml:73-83`, which greps
+      # estate-wide key check that existed before this is `secret-hygiene.yml`, which greps
       # repository FILES for PEM blocks; a grep over files cannot see what a running route returns and
       # the two do not overlap at all.
       #
@@ -899,7 +899,7 @@ jobs:
       # out of the vault under any name), `shape` (a literal that IS a key — a PEM block, an `xprv`, a
       # WIF) and `row` (a whole table row from a table with a secret column reaching a body). Its
       # vocabulary is sourced to custody's own statement of the boundary
-      # (`custody/src/exports.ts:440-453`); session tokens, password hashes, public keys and
+      # (`custody/src/exports.ts`); session tokens, password hashes, public keys and
       # salt/iv/nonce are deliberately NOT in it, because a vocabulary containing them would fire on
       # nearly every authenticating route in the estate on its first run and be switched off inside a
       # week.
@@ -1115,7 +1115,7 @@ jobs:
             echo
             echo "Two services naming one \`(subject, asset_code, purpose)\` with two \`type\`s means the"
             echo "second to post in production has **every** entry refused — \`AccountConflictError\`,"
-            echo "\`ledger/src/accounts.ts:125\`."
+            echo "\`ledger/src/accounts.ts\`."
             echo
             echo '```'
             tail -c 30000 "$RUNNER_TEMP/report.txt" 2>/dev/null || echo "(no report — the step did not get that far, read the run)"
@@ -1206,7 +1206,7 @@ jobs:
       #
       # The one found while writing the third, and deliberately NOT added here, so that it is not
       # lost: several services stamp the envelope's wire `version` as an INTEGER (`values (…, 1, …)`,
-      # ledger/src/entries.ts:426 and its siblings) where `@cloudsforge/contracts-events` requires
+      # ledger/src/entries.ts and its siblings) where `@cloudsforge/contracts-events` requires
       # `"major.minor"`. Those events are refused at the envelope and never delivered. It is a real
       # defect and it is NOT estate-wide: a producer's own repository depends on contracts-events and
       # can check its own outbox writes against it without seeing another repository at all. It

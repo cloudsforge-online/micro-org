@@ -17,7 +17,7 @@ jobs:
     # CHECKED OUT AS `org`, NOT AS `micro-org`, AND THE NAME IS LOAD-BEARING.
     #
     # `cfctl` resolves every repository as a SIBLING NAMED BY ITS LOCAL NAME — `repoDir` is
-    # `microRoot()/<row.name>` (tools/cfctl.ts:86-88) and `microRoot()` is the checkout's parent
+    # `microRoot()/<row.name>` (tools/cfctl.ts) and `microRoot()` is the checkout's parent
     # (:69-72). GitHub's default layout is `/home/runner/work/micro-org/micro-org`, so the parent
     # held one directory called `micro-org`, which is a remote name and matches no registry row.
     # `doctor` correctly reported it as a repository on this disk that the registry does not name,

@@ -13,7 +13,7 @@
 // `topic:` property — `emit({ topic: 'x.y.z' })`, `topic: SETTLEMENT_OUTBOUND_FAILED`,
 // `topic: TOPICS.keyIssued` — so that property is the seed, and identifiers are resolved to the
 // string constants they name. A grep for topic-shaped literals cannot do this job: `billing/src/
-// jobs.ts:60` declares `EXPIRE_KIND = 'billing.entitlement.expire'` and `policy/src/actions.ts:154`
+// jobs.ts` declares `EXPIRE_KIND = 'billing.entitlement.expire'` and `policy/src/actions.ts`
 // declares an action `'identity.password.reset'`. Both are topic-shaped, neither is a topic, and a
 // checker that called them emits would report four services as broken on its first run and be
 // switched off by its second.
@@ -47,11 +47,11 @@
 //
 // `outboxWrites` exists because ledger writes its most-consumed topic straight into the outbox
 // table in SQL, with no `topic:` property anywhere near it. It was written to read a LITERAL in the
-// topic column, and `ledger/src/entries.ts:441` now writes
+// topic column, and `ledger/src/entries.ts` now writes
 //
 //     values (${ENTRY_POSTED}, …)
 //
-// — the constant declared at `entries.ts:199`, for the express reason that a name is reachable from
+// — the constant declared in the same file, for the express reason that a name is reachable from
 // `topics.ts` and an inlined string is not. The `topic:` path has resolved identifiers and members
 // since its first run. This one bailed on anything starting `${`, so the emit vanished and direction
 // 1 reported "no `topic:` in ledger/src ever names it… the repair is an emit, not a rename" about a
@@ -120,7 +120,7 @@ const TOPIC_SHAPE = /^[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*){2}$
 function stripComments(text) {
   let out = ''
   // 1 for every character INSIDE a string or template literal. A seed is only a seed in code:
-  // `notify/src/events.ts:70` builds the message `topic: "${topic}" is not in this registry`, and a
+  // `notify/src/events.ts` builds the message `topic: "${topic}" is not in this registry`, and a
   // checker that read that as an emit site would demand the estate emit a sentence.
   const inString = []
   /** { value, index, quote } for each literal, `index` in the STRIPPED text so lineOf agrees. */
@@ -427,7 +427,7 @@ function emitsOf(repo) {
 
     // ── the second emit shape, and the reason this is a derivation rather than a grep ──
     //
-    // `ledger/src/entries.ts:439` puts `ledger.entry.posted` on the bus by writing the outbox row
+    // `ledger/src/entries.ts` puts `ledger.entry.posted` on the bus by writing the outbox row
     // itself, in SQL, inside a tagged template. There is no `topic:` anywhere near it. A checker
     // that knew only the first shape reported ledger's most-consumed topic as produced by nobody —
     // which is what the first run of this file did, and it is the same lesson conformance's
@@ -491,7 +491,7 @@ function emitsOf(repo) {
  *   * AN ILLEGAL NAME. See TOPIC_SHAPE at the caller.
  *
  * THE HOLE THAT IS LEFT, deliberately. A bare `insert into outbox` with neither a column list nor a
- * `values (`, is skipped rather than reported, because `notify/src/topics.ts:231` says in a STRING
+ * `values (`, is skipped rather than reported, because `notify/src/topics.ts` says in a STRING
  * that "policy has no outbox at all — no outbox.ts, no `insert into outbox` anywhere in policy/src".
  * `inString` cannot separate that from real SQL: the real SQL is a tagged template, so every
  * character of it is inside a string too. Six guards in this estate have fired on their own prose,
@@ -624,7 +624,7 @@ const emitSite = (repo, topic) => EMITS.get(repo)?.get(topic)?.[0]?.where ?? '(n
  *
  * "NOBODY EMITS THIS" IS TWO FINDINGS WITH TWO DIFFERENT REPAIRS, and this file used to print one
  * sentence for both. `custody.key.exported` was recorded here as custody's export path "completing
- * in silence"; it was not silent. `custody/src/exports.ts:422` was emitting
+ * in silence"; it was not silent. `custody/src/exports.ts` was emitting
  * `custody.export.completed` — a name in no registry, with no subscriber anywhere in the estate —
  * while `custody.key.exported` was named in seven places across five repositories, including a
  * CRITICAL notify rule. The repair was a rename in one repository. Read as written, the record
@@ -802,7 +802,7 @@ function quarantined(repo) {
  *
  * NOT AN EXEMPTION LIST, and the difference is mechanical: an entry is stale — and fails — the
  * moment the estate stops matching it, in either direction. It is the `UNPRODUCED_NOTIFICATIONS`
- * pattern (notify/src/topics.ts:106), moved to the only checkout that can see both halves.
+ * pattern (notify/src/topics.ts), moved to the only checkout that can see both halves.
  */
 const gaps = new Map()
 
@@ -985,7 +985,7 @@ for (const repo of repos) {
       const producer = member.topic.split('.')[0].replace(/_/g, '-')
       if (producer === repo) continue
       // A first segment that names no service in this checkout is not a service topic this job can
-      // judge. `web.page.viewed` (analytics/src/catalogue.ts:327) is a browser event posted to an
+      // judge. `web.page.viewed` (analytics/src/catalogue.ts) is a browser event posted to an
       // ingest route by four separate front ends; there is no `web/src` and there is not meant to
       // be. Saying "no producer emits it" about that would be a confident falsehood.
       if (!sources.has(producer)) {
@@ -1033,7 +1033,7 @@ for (const repo of repos) {
  *
  * `emitSessionRevoked` was written, correct, registered and called by NOTHING, while notify held a
  * critical rule on the topic. Every name-based check above passed. This is identity's
- * `unreferencedEmitters` (identity/src/topics.ts:144) applied to every producer in the estate,
+ * `unreferencedEmitters` (identity/src/topics.ts) applied to every producer in the estate,
  * including the twenty that never wrote one.
  *
  * It is a syntactic proxy and says so: it catches an emitter with no caller, and it does not prove

@@ -4,16 +4,16 @@ name: publish-image
 # THE PRODUCER. Until this file existed the estate had a release format, a generator and a
 # consumer, and nothing that made the artefact all three describe.
 #
-#   generator   org/tools/cfctl.ts:889-934   `cfctl release` writes a manifest naming, per service,
+#   generator   org/tools/cfctl.ts   `cfctl release` writes a manifest naming, per service,
 #                                            ghcr.io/<org>/<repo> at that repository's package.json
 #                                            version (:906) and the commit it was built from.
-#   verifier    org/tools/cfctl.ts:937-975   `cfctl release --verify` requires `docker manifest
+#   verifier    org/tools/cfctl.ts   `cfctl release --verify` requires `docker manifest
 #                                            inspect` to succeed for EVERY image the manifest names.
 #   consumer    deploy/scripts/release-render.py
 #                                            renders a compose overlay pinning every image and
 #                                            deleting `build:` with `!reset`, so a release deploy
 #                                            cannot fall back to building from a working tree.
-#   deployer    deploy/scripts/release-deploy.sh:99-125
+#   deployer    deploy/scripts/release-deploy.sh
 #                                            refuses to change anything until every image pulls.
 #
 # With no producer, `release-deploy.sh` stops at that gate for every service in the estate and the
@@ -22,7 +22,7 @@ name: publish-image
 #
 # ── WHY THIS IS A SEPARATE WORKFLOW AND NOT `push: true` IN service-ci.yml ──────────────────────
 #
-# The obvious fix — flip `service-ci.yml:1210` and `web-ci.yml:260` to `push: true` and add
+# The obvious fix — flip `service-ci.yml` and `web-ci.yml` to `push: true` and add
 # `packages: write` — CANNOT WORK, and does not fail gently. It was measured, not assumed:
 #
 #   micro-org run 30900277471   caller grants `packages: read`, called workflow asks for
@@ -85,8 +85,8 @@ on:
         description: >-
           The image name, WITHOUT the registry. Defaults to this repository's own name, which is
           not a convenience: `cfctl` derives the manifest's image as
-          `ghcr.io/<org>/<repo.repo>` (org/tools/registry.ts:367-369, asserted in
-          test/cfctl.test.ts:273), and repo.repo IS the repository name. Overriding this is how a
+          `ghcr.io/<org>/<repo.repo>` (org/tools/registry.ts, asserted in
+          test/cfctl.test.ts), and repo.repo IS the repository name. Overriding this is how a
           release manifest comes to name an image nothing publishes.
         required: false
         default: ''
@@ -192,7 +192,7 @@ jobs:
       # THREE, and each is there for a different reason:
       #
       #   <version>   package.json's version. THE LOAD-BEARING ONE: `cfctl release` writes exactly
-      #               this into the manifest (org/tools/cfctl.ts:906), so a release that does not
+      #               this into the manifest (org/tools/cfctl.ts), so a release that does not
       #               carry it is a manifest `--verify` rejects. It is treated as IMMUTABLE — see
       #               the step below, which refuses to move an existing one.
       #   sha-<sha>   the full commit sha. Always unique, always safe to push, and the only tag that
@@ -215,7 +215,7 @@ jobs:
 
           if [ ! -f package.json ]; then
             echo "::error::no package.json, so there is no version to tag with"
-            echo "cfctl release records package.json's version as the image tag (cfctl.ts:906)."
+            echo "cfctl release records package.json's version as the image tag (cfctl.ts)."
             exit 1
           fi
           version=$(node -p "require('./package.json').version || ''")
@@ -270,7 +270,7 @@ jobs:
 
           # The ANONYMOUS pull flow: GHCR answers 401 to an unauthenticated /v2/ request for a
           # PUBLIC package as readily as for a private one, so a bare curl cannot tell them apart.
-          # A token has to be fetched first. (org/tools/cfctl.ts:498-507 gets this wrong and reports
+          # A token has to be fetched first. (org/tools/cfctl.ts gets this wrong and reports
           # every published package as private; fixed in the same change as this file.)
           token=$(curl -s -m 10 "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
                   | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
@@ -307,7 +307,7 @@ jobs:
           # THE PUBLISHED IMAGE MUST KNOW WHICH RELEASE IT IS. The frontends bake this into a
           # `cf-release` meta tag at build time (`ARG RELEASE=dev`, substituted into index.html —
           # e.g. `status-web/Dockerfile:45-46`), and every gate build passes it
-          # (`status-web/.github/workflows/ci.yml:219`). This workflow did not, so the first images
+          # (`status-web/.github/workflows/ci.yml`). This workflow did not, so the first images
           # ever published by this estate all identified themselves as "dev" — leaving no way to
           # tell a deployed frontend which build it came from, which is exactly the question a bug
           # report asks. Passed here rather than as a caller input so no repo has to remember it,

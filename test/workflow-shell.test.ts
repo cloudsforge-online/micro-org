@@ -238,7 +238,7 @@ function runAudit(files: Record<string, string>, registry: readonly string[]): {
 
 /** One fixture with every shape that defeated a sweep. */
 const ESTATE_SHAPES: Record<string, string> = {
-  // inline literal — the shape community/src/server.ts:1056 hid from the constant-reading sweep
+  // inline literal — the shape community/src/server.ts hid from the constant-reading sweep
   'src/inline.ts': `
     export async function handle(principal: Principal) {
       requireScope(principal, 'fixture:read')
@@ -262,7 +262,7 @@ const ESTATE_SHAPES: Record<string, string> = {
       await authorise(ctx, deps, DEEP_SCOPE)
     }
   `,
-  // computed family closed over an enumerated set — custody/src/gates.ts:177's shape
+  // computed family closed over an enumerated set — the shape of custody/src/gates.ts
   'src/family.ts': `
     const PURPOSES = new Set<Purpose>(['alpha', 'beta'])
     export function signScopeFor(purpose: string): string {
@@ -565,8 +565,8 @@ describe('estate-ci sweeps the whole estate, or says so', () => {
   })
 
   it('the raw-insert canary plants a constant in the topic column, and is graded in two passes', () => {
-    // Not every emit reaches the bus through a `topic:` property. ledger/src/entries.ts:439 writes
-    // the outbox row in SQL and names the topic with the constant at entries.ts:199 — for the
+    // Not every emit reaches the bus through a `topic:` property. ledger/src/entries.ts writes
+    // the outbox row in SQL and names the topic with a constant in that same file — for the
     // express reason that a constant is reachable from ledger's own topics.ts and an inlined string
     // is not. The raw-insert path read a LITERAL there and bailed on anything opening `${`, so the
     // estate's most-consumed topic left the emitted set the day ledger named it, and the sweep said
@@ -685,7 +685,22 @@ test('every recorded estate topic gap names an owner, its evidence, and why it i
       (entry.evidence ?? '').length >= 80,
       `${key}: under eighty characters of evidence is a hole, not a decision`,
     )
-    assert.match(entry.evidence ?? '', /\.ts:\d+/, `${key}: evidence must cite a file and a line, not a summary`)
+    // A FILE AND A SYMBOL, NEVER A LINE. This required `\.ts:\d+` — evidence had to name a line
+    // number in a service micro-org does not own and does not watch. Every one of those records
+    // was wrong within a week of being written, silently, because nothing runs this suite when a
+    // service is edited; and a wrong citation in a gap record is worse than none, since the record
+    // exists to send somebody to the exact place. So the rule is inverted: evidence must name a
+    // source file, and must NOT name a position in it.
+    assert.match(
+      entry.evidence ?? '',
+      /[\w/.-]+\.(?:ts|tsx|sol|mjs|md)\b/,
+      `${key}: evidence must cite a source file, not a summary`,
+    )
+    assert.doesNotMatch(
+      entry.evidence ?? '',
+      /[\w/.-]+\.(?:ts|tsx|sol|mjs|md):\d+/,
+      `${key}: evidence must not cite a LINE — it names a position in a repository micro-org does not own, and it is stale by the time anybody reads it. Name the file and the symbol.`,
+    )
     assert.match(entry.recordedAt ?? '', /^\d{4}-\d{2}-\d{2}$/, `${key}: a record with no age cannot be seen to rot`)
     // `status` is what the first nine were missing. Two of them were not omissions at all but
     // decisions taken in micro-notify, with the one field each needs written down; recorded as

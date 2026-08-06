@@ -26,7 +26,7 @@ and on demand, in micro-org, and blocks nothing outside micro-org.
 That is a decision, not an oversight, and the whole argument is in the file's own header. The short
 version: an estate-wide check that can turn a service's pull request red for a defect its author did
 not cause and cannot fix is a check that gets switched off within a week, which is the failure mode
-`micro-beacon` already writes down about its own release gate (`beacon/src/estate.ts:15`). So the
+`micro-beacon` already writes down about its own release gate (`beacon/src/estate.ts`). So the
 red lands in micro-org, and — because a nightly red that belongs to nobody is wallpaper — it also
 opens an issue labelled `estate-invariant`, and closes it again when the sweep is green.
 

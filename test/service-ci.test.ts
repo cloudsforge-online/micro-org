@@ -225,7 +225,7 @@ test('the poll stops early once the container has exited rather than waiting the
   // seconds regardless, turning a fast failure into a slow one with no extra signal.
   //
   // ASKED OF DOCKER RATHER THAN GREPPED OUT OF A PIPE. This asserted the pipe version until it went
-  // red, because service-ci.yml:1218 replaced it and this line was not moved with it. The pipe is a
+  // red, because service-ci.yml replaced it and this line was not moved with it. The pipe is a
   // SIGPIPE race under `set -uo pipefail`: `grep -q` exits the instant it matches, the writer gets
   // EPIPE, pipefail makes the pipeline non-zero, the loop breaks, and the step reports "the image
   // never answered /livez" about a container that was answering. It is in the reusable workflow

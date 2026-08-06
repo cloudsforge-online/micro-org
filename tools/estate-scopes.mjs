@@ -22,7 +22,7 @@
 //
 // `service-ci.yml` proves **demands ⊆ registry**, one repository at a time: a gate asking for a
 // scope `@cloudsforge/contracts-auth` does not name fails that repository's build, because identity
-// would refuse to mint it (identity/src/env.ts:141). That is half of totality and it is the half a
+// would refuse to mint it (identity/src/env.ts). That is half of totality and it is the half a
 // single checkout can see.
 //
 // The other half is **registry ⊆ demands**: a registered scope that no gate anywhere demands. From

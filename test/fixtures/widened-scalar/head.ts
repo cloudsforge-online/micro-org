@@ -2,7 +2,7 @@
 // widened to `number`. Every value that satisfied the old types still satisfies the new ones.
 export const ROUTE: { readonly path: '/v1/tokens'; readonly verifiedAt: string; readonly weight: number } = {
   path: '/v1/tokens',
-  verifiedAt: 'mint/src/server.ts:373',
+  verifiedAt: 'mint/src/server.ts',
   weight: 3,
 };
 

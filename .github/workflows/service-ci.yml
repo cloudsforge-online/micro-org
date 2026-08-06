@@ -209,7 +209,7 @@ jobs:
       # Every scope this service's gates demand exists in the contracts registry.
       #
       # The registry knew 14 scopes while the estate's services gated on ~30 more. identity
-      # fail-fasts on any grant naming an unknown scope (identity/src/env.ts:141), so a scope
+      # fail-fasts on any grant naming an unknown scope (identity/src/env.ts), so a scope
       # missing from the registry is a service-to-service surface no identity-issued token can
       # ever reach — and every suite stays green regardless, because each mints its own fake
       # principals. Three audit sweeps each missed a different shape — inline literals, sibling
@@ -809,7 +809,7 @@ jobs:
           #     disabled") → the original disaster, unchanged and still fatal.
           #
           # A line naming BOTH counts as a stand-down, and that is sound rather than lenient:
-          # `indexer/src/chainbacking.test.ts:79` prints both names in one sentence, and this job
+          # `indexer/src/chainbacking.test.ts` prints both names in one sentence, and this job
           # has just exported the own half itself, so the own half cannot be why anything skipped.
           if [ "$NEEDS_DB" = "true" ]; then
             reported=$(grep -iE 'set [A-Z_]*TEST_DATABASE_URL|database tests are disabled' /tmp/test-output.txt | sort -u || true)

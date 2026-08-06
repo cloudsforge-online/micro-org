@@ -1,8 +1,8 @@
-// A citation swept into the public type by `as const`. It is provenance, not a contract: the whole
-// value of a `path:line` is being correct, which means being edited whenever the cited file moves.
+// A citation swept into the public type by `as const`. It is provenance, not a contract: its whole
+// value is being correct, which means being edited whenever the cited file is renamed or split.
 export const ROUTE = {
   path: '/v1/tokens',
-  verifiedAt: 'mint/src/server.ts:359',
+  verifiedAt: 'mint/src/server.ts',
   weight: 3,
 } as const;
 

@@ -57,9 +57,9 @@ Read out of `src/server.ts`. Note operator-only and internal routes as such.
 
 | Method | Path | Who | Idempotency-Key | What it does |
 | --- | --- | --- | --- | --- |
-| `GET` | `/things` | user or service | — | … (`src/server.ts:312`) |
-| `POST` | `/things` | user | **required** | … (`src/server.ts:340`) |
-| `POST` | `/internal/things/:id/x` | service only | required | … (`src/server.ts:501`) |
+| `GET` | `/things` | user or service | — | … (`src/server.ts`) |
+| `POST` | `/things` | user | **required** | … (`src/server.ts`) |
+| `POST` | `/internal/things/:id/x` | service only | required | … (`src/server.ts`) |
 
 State which routes make **no** `authenticate()` call — a client that sends a token to one of those
 gets a 403 it cannot diagnose, which is a defect this estate has actually shipped.
@@ -71,7 +71,7 @@ happens when two replicas run it.
 
 | Job | Lease key | Cadence | Two replicas |
 | --- | --- | --- | --- |
-| `thing.sweep` | `thing:<id>` | 30s | one claims, the other finds nothing (`src/jobs.ts:88`) |
+| `thing.sweep` | `thing:<id>` | 30s | one claims, the other finds nothing (`src/jobs.ts`) |
 
 ## The database
 
@@ -80,7 +80,7 @@ in the schema rather than in a handler.
 
 | Constraint | Refuses | Why here |
 | --- | --- | --- |
-| `entries_balanced` (deferred) | an unbalanced journal | it holds against a caller with a database connection, which a handler does not (`src/migrations.ts:324`) |
+| `entries_balanced` (deferred) | an unbalanced journal | it holds against a caller with a database connection, which a handler does not (`src/migrations.ts`) |
 
 ## Configuration
 
@@ -89,7 +89,7 @@ Every variable, its default, and what breaks if it is wrong. Cross-check `.env.e
 
 | Variable | Default | If wrong |
 | --- | --- | --- |
-| `X_DATABASE_URL` | — | the service refuses to start (`src/env.ts:41`) |
+| `X_DATABASE_URL` | — | the service refuses to start (`src/env.ts`) |
 
 ## What it talks to
 
@@ -98,7 +98,7 @@ when it is unavailable** — fail-open or fail-closed, and why that choice was m
 
 | Upstream | Routes | When it is down |
 | --- | --- | --- |
-| `micro-ledger` | `POST /entries` (`ledger/src/server.ts:210`) | fail closed; a spend that cannot be recorded must not happen |
+| `micro-ledger` | `POST /entries` (`ledger/src/server.ts`) | fail closed; a spend that cannot be recorded must not happen |
 
 ## Running it
 

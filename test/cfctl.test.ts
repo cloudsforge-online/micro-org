@@ -169,9 +169,9 @@ test('every deployable gets a distinct container port, and an unregistered name 
  *
  *   * all eleven original frontends slid by four — `hub-web` 4122 -> 4126, `status-web` 4132 -> 4136
  *   * all three ops services slid by nine — `lantern` 4133 -> 4142, `faucet` 4135 -> 4144
- *   * `tessera` derives 4125, and `deploy/compose/docker-compose.estate.yml:1423` pins 4140
+ *   * `tessera` derives 4125, and `deploy/compose/docker-compose.estate.yml` pins 4140
  *
- * `docker-compose.estate.yml:1545-1553` says its host ports are "derived, like every other port
+ * `docker-compose.estate.yml` says its host ports are "derived, like every other port
  * here", off `4100 + index in deployableRepos()`, and :1568 says `scripts/web-check.py` "fails when
  * this file and the registry disagree, so the drift cannot be silent". THAT SCRIPT DOES NOT EXIST.
  * micro-deploy/scripts holds nine files and none of them is it, so the sole claimed guard on this
@@ -199,7 +199,7 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   'emberkin-web', 'foresight-web', 'aetherholm-web', 'tessera-web',
   // 4141-4143 — the three operations services of 03 §1.3.
   'lantern', 'beacon', 'faucet',
-  // 4144-4145 — the two operator consoles, appended (registry.ts:305-324).
+  // 4144-4145 — the two operator consoles, appended (registry.ts, after the derived block).
   'lantern-web', 'beacon-web',
 ];
 
