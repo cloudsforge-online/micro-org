@@ -58,6 +58,29 @@
 # JWT SHAPE with deliberately no expiry check (#228). An expiry check there would crash-loop the
 # service on every restart. It is not a defect and it was not "fixed".
 #
+#
+# ── FOUR SERVICES CARRIED FORWARD AT THE TAG THEY ARE ACTUALLY RUNNING ─────────────────────────
+#
+# A manifest cut from repositories records what COULD ship. It does not record what IS shipping,
+# and a service deployed by hand since the last release sits at a tag no manifest names. Pinning
+# from repositories alone therefore rolls it BACKWARDS, silently, as part of an unrelated change.
+# 2026.08.10's header records this trap catching `nda` and `notify`; it was re-run against the
+# LIVE containers before this release was cut and caught four more:
+#
+#     hub-web   1.1.0 -> would have rolled back a running 1.1.1
+#     identity  1.3.0 -> would have rolled back a running 1.4.1
+#     notify    1.2.0 -> would have rolled back a running 1.3.0
+#     trade     1.0.0 -> would have rolled back a running 1.1.0
+#
+# `identity` 1.4.1 and `notify` 1.3.0 are another agent's password-reset work, in flight and
+# deployed. `trade` 1.0.0 was held back by 2026.08.10 because micro-trade:1.1.0 did not exist in
+# GHCR at the time; it exists now and is running. All four are carried at their RUNNING tag, each
+# verified the same two ways as everything else here: the tag pulls, and its digest equals that of
+# the `sha-<HEAD>` tag of the same repository.
+#
+# None of the four is otherwise touched by this release. Recording a running tag is not a change
+# to that service -- it is the difference between a manifest that describes the estate and one
+# that quietly reverts it.
 # `indexer` is untouched on purpose: Litecoin sync is still ~120,000 blocks from its tip.
 # `identity` and `notify` are untouched: another agent holds password-reset work in flight.
 version: "2026.08.11"
@@ -68,8 +91,8 @@ services:
     repo: micro-identity
     kind: service
     image: ghcr.io/cloudsforge-online/micro-identity
-    tag: "1.3.0"
-    commit: "3dd145ec9d19d8ca8c872e940f881455fd710a24"
+    tag: "1.4.1"
+    commit: "0381e2bea1f6e84392c37616ff735bf0d99539af"
   - name: policy
     repo: micro-policy
     kind: service
@@ -128,8 +151,8 @@ services:
     repo: micro-notify
     kind: service
     image: ghcr.io/cloudsforge-online/micro-notify
-    tag: "1.2.0"
-    commit: "3c9a9a7f28cae89a087115377394ebd453542241"
+    tag: "1.3.0"
+    commit: "f662f19e99fab00d9144f6f89ef0f62cfc32a2e2"
   - name: studio
     repo: micro-studio
     kind: service
@@ -152,8 +175,8 @@ services:
     repo: micro-trade
     kind: service
     image: ghcr.io/cloudsforge-online/micro-trade
-    tag: "1.0.0"
-    commit: "a51214662a40cf9d3b0c1a7d5715dceae60cb5f0"
+    tag: "1.1.0"
+    commit: "f6f0d7aeaf1b53e52c20c8f4c7ed0d90b5b5716d"
   - name: worlds
     repo: micro-worlds
     kind: service
@@ -224,8 +247,8 @@ services:
     repo: micro-hub-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-hub-web
-    tag: "1.1.0"
-    commit: "c7f2c8494e8f52e8efbf3ba7650da9475a16f0d9"
+    tag: "1.1.1"
+    commit: "f448b8d84109193fe500f7de9aac8a59af5a3d04"
   - name: site
     repo: micro-site
     kind: web
