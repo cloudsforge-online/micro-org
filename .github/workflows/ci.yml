@@ -17,8 +17,9 @@ jobs:
     # CHECKED OUT AS `org`, NOT AS `micro-org`, AND THE NAME IS LOAD-BEARING.
     #
     # `cfctl` resolves every repository as a SIBLING NAMED BY ITS LOCAL NAME — `repoDir` is
-    # `microRoot()/<row.name>` (tools/cfctl.ts) and `microRoot()` is the checkout's parent
-    # (:69-72). GitHub's default layout is `/home/runner/work/micro-org/micro-org`, so the parent
+    # `microRoot()/<row.name>` (`repoDir` and `microRoot()` in tools/cfctl.ts), and `microRoot()`
+    # is the checkout's parent. GitHub's default layout is `/home/runner/work/micro-org/micro-org`,
+    # so the parent
     # held one directory called `micro-org`, which is a remote name and matches no registry row.
     # `doctor` correctly reported it as a repository on this disk that the registry does not name,
     # and failed — for a checkout layout, not for anything wrong with the estate.
@@ -38,7 +39,7 @@ jobs:
         with: { path: org }
       - uses: pnpm/action-setup@v4
         with:
-          # Pinned for the same reason service-ci.yml pins it (:163-169): package.json is in org/
+          # Pinned for the same reason service-ci.yml pins it: package.json is in org/
           # now, and pnpm/action-setup looks in the working directory for the packageManager field.
           version: 11.9.0
       - uses: actions/setup-node@v4

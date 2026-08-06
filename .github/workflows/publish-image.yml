@@ -6,7 +6,7 @@ name: publish-image
 #
 #   generator   org/tools/cfctl.ts   `cfctl release` writes a manifest naming, per service,
 #                                            ghcr.io/<org>/<repo> at that repository's package.json
-#                                            version (:906) and the commit it was built from.
+#                                            version and the commit it was built from.
 #   verifier    org/tools/cfctl.ts   `cfctl release --verify` requires `docker manifest
 #                                            inspect` to succeed for EVERY image the manifest names.
 #   consumer    deploy/scripts/release-render.py
