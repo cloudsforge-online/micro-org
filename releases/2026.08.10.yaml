@@ -21,8 +21,8 @@
 #                     tree is mid-change (`src/env.ts` is dirty). Pinning it would fail the pull
 #                     gate; building it would name a working tree.
 # `community` 1.2.0, `tessera` 1.2.0 AND `admin-api` 1.3.0 SHIP HERE, and it is the reason this release is not a tidy-up. Its credential
-# was dead, so policy answered 401, `policyclient.ts:192-197` turned that into `deny`/`policy_401`,
-# `executions.ts:290` raised SpendRefusedError and `jobs.ts:353-357` SWALLOWED it: communities that
+# was dead, so policy answered 401, `policyclient.ts` turned that into `deny`/`policy_401`,
+# `executions.ts` raised SpendRefusedError and `jobs.ts` SWALLOWED it: communities that
 # had passed a vote were told the platform refused their spend, by a gate that was never actually
 # asked, while the job reported success. It needs a compose change to boot, made in
 # micro-deploy alongside this, and the pair is ATOMIC -- ship either half alone and the service
