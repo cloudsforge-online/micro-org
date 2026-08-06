@@ -132,7 +132,19 @@ jobs:
     # from putting a branch build behind the `main` tag. A pull request from a fork cannot reach
     # here at all — a fork's token is read-only regardless of what the caller asks for — and this
     # also refuses a push on any branch but main.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+    # `design-system/*` is admitted alongside main, and narrowly: a redesign has to be SEEN on
+    # testnet before anyone can judge it, and a branch that cannot produce an image cannot be
+    # deployed anywhere. Merging to main first would defeat the point of reviewing on a branch.
+    #
+    # Safe against the one thing that could go wrong — a branch build sitting behind a tag main
+    # will later want — because the tag is `package.json`'s version and every design branch carries
+    # a version main does not. GHCR tags are immutable, so a collision is a hard failure rather
+    # than a silent overwrite: it cannot quietly replace a released image.
+    #
+    # Every other branch is still refused, and a fork still cannot reach here at all.
+    if: >-
+      github.event_name == 'push' && !github.event.repository.fork &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/'))
 
     permissions:
       contents: read
