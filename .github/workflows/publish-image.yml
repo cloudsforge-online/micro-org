@@ -47,7 +47,9 @@ name: publish-image
 #
 #   publish:
 #     needs: estate                 # only publish what passed
-#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     if: >-
+#       github.event_name == 'push' && (github.ref == 'refs/heads/main' ||
+#       startsWith(github.ref, 'refs/heads/release/'))
 #     uses: cloudsforge-online/micro-org/.github/workflows/publish-image.yml@main
 #     with:
 #       kind: service               # or: web
@@ -136,15 +138,27 @@ jobs:
     # testnet before anyone can judge it, and a branch that cannot produce an image cannot be
     # deployed anywhere. Merging to main first would defeat the point of reviewing on a branch.
     #
+    # `release/*` is admitted for the same reason, and it is the stronger case of the two. This
+    # estate deploys by version bump: the tag IS the deploy mechanism, and a release is forty-six
+    # repositories moving to one version together. Without this, the only way to rehearse a release
+    # on testnet is to merge all forty-six to main first — which makes testnet a rehearsal of what
+    # has already shipped rather than of what is about to. The owner's rule is the same one stated
+    # the other way round: "build and publish from your branch a common version for all containers
+    # when you update one", and that rule was not expressible until this line changed.
+    #
     # Safe against the one thing that could go wrong — a branch build sitting behind a tag main
-    # will later want — because the tag is `package.json`'s version and every design branch carries
-    # a version main does not. GHCR tags are immutable, so a collision is a hard failure rather
-    # than a silent overwrite: it cannot quietly replace a released image.
+    # will later want — because the tag is `package.json`'s version and every design or release
+    # branch carries a version main does not. GHCR tags are immutable, so a collision is a hard
+    # failure rather than a silent overwrite: it cannot quietly replace a released image. A
+    # `release/*` branch whose version bump was forgotten therefore fails loudly at the push rather
+    # than pinning last release's image, which is exactly the failure the design overlay's own
+    # header warns about ("A TAG HERE MUST DIFFER FROM THE ONE ON main").
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/'))
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
+      startsWith(github.ref, 'refs/heads/release/'))
 
     permissions:
       contents: read
