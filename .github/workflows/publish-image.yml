@@ -154,19 +154,23 @@ jobs:
     # so what it publishes is `sha-<sha>`, which is exactly the tag a one-off deploy should pin.
     #
     # Safe against the one thing that could go wrong — a branch build sitting behind a tag main
-    # will later want — on TWO counts now, because until the tag list was gated only the first held
-    # and it did not cover the case it claimed to:
+    # will later want — on THREE counts now. The first of the three used to be stated here as a
+    # property of the registry, and that was simply false; it is now a property of this file:
     #
-    #   1. The version tag is `package.json`'s and GHCR tags are immutable, so a collision is a hard
-    #      failure rather than a silent overwrite: it cannot quietly replace a released image. A
-    #      `release/*` branch whose version bump was forgotten fails loudly at the push rather than
-    #      pinning last release's image, which is exactly the failure the design overlay's own
-    #      header warns about ("A TAG HERE MUST DIFFER FROM THE ONE ON main").
+    #   1. A ref that is not `main` or `release/**` does not publish a version tag at all, and a
+    #      version that already resolves is not republished. Both are decided in the `immutable`
+    #      step below. GHCR tag immutability is an OPT-IN registry setting and is NOT enabled on
+    #      this org — a second push of the same tag overwrites it silently, with no error anywhere.
+    #      This comment previously asserted the opposite and the check meant to compensate never
+    #      fired (see that step), which is how 39 of 45 pinned version tags in the estate came to
+    #      resolve to something other than what was deployed under them.
     #   2. The `main` tag is now pushed only from `refs/heads/main`. It used to be pushed
     #      unconditionally, which meant every admitted branch moved it — the precise hazard this
     #      comment block opens by naming, sitting in the tag list underneath it the whole time.
     #      Admitting a fourth branch pattern without fixing that would have made a rare accident
     #      into a routine one.
+    #   3. `sha-<sha>` is derived from the commit, so it is unique by construction and is the tag
+    #      a one-off deploy of a branch build should pin.
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     if: >-
@@ -221,8 +225,9 @@ jobs:
       #
       #   <version>   package.json's version. THE LOAD-BEARING ONE: `cfctl release` writes exactly
       #               this into the manifest (org/tools/cfctl.ts), so a release that does not
-      #               carry it is a manifest `--verify` rejects. It is treated as IMMUTABLE — see
-      #               the step below, which refuses to move an existing one.
+      #               carry it is a manifest `--verify` rejects. It is treated as IMMUTABLE by the
+      #               step below — by that step and by nothing else, not by the registry, which
+      #               will happily accept a second push of the same tag and move it.
       #   sha-<sha>   the full commit sha. Always unique, always safe to push, and the only tag that
       #               can answer "what code is this" for a commit that did not bump the version.
       #   main        the moving head of the branch, which is what a compose file without a manifest
@@ -282,12 +287,16 @@ jobs:
 
           echo "ok: ${ref} @ ${version} (${GITHUB_SHA})"
 
-      # ── The version tag is immutable ──────────────────────────────────────────────────────────
+      # ── The version tag is never moved, and NOTHING BUT THIS STEP MAKES THAT TRUE ─────────────
       #
       # Republishing 1.2.0 from a later commit would mean two different artefacts wearing one name,
       # and a manifest pinned to 1.2.0 would silently stop describing what it was verified against.
       # Rollback is checking out the previous manifest (releases/README.md), and that only works if
       # a tag in an old manifest still resolves to the image that manifest was cut from.
+      #
+      # The registry does not help. GHCR tag immutability is opt-in and is off here, so a push of
+      # an existing tag succeeds and moves it, quietly. Every guarantee the paragraph above claims
+      # rests on this one `if`, which is why its failure modes are spelled out at such length.
       #
       # So an existing version tag is NEVER overwritten. It is also not a failure: most commits on
       # main are not releases, and a producer that went red on every unbumped commit would be
@@ -307,18 +316,66 @@ jobs:
           # every published package as private; fixed in the same change as this file.)
           token=$(curl -s -m 10 "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
                   | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+          # ── THE `Accept` HEADER, WITHOUT WHICH THIS CHECK CANNOT EVER FIND ANYTHING ────────────
+          #
+          # Every image this workflow pushes is multi-arch, so a tag resolves to an OCI *index*.
+          # A manifest request that does not say it accepts an index gets **404**, not 200 — the
+          # registry has the tag and declines to describe it in a media type the caller never
+          # offered to read. This curl had no `Accept` header, so `code` was 404 on every run,
+          # including for tags that plainly existed, and the check therefore reported "not yet
+          # published" every single time it has ever run.
+          #
+          # The consequence was not a warning nobody saw. `publish_version` was permanently `true`,
+          # so EVERY push republished `package.json`'s version — and a version only bumps on a
+          # release branch, so every ordinary commit to main after a release silently re-pointed
+          # that release's tag at itself. Measured on 2026-08-09 against the live estate: **39 of
+          # 45 version-pinned services** had a `2.5.6` tag that no longer resolved to the image the
+          # running container was created from. A manifest pinning `2.5.6` had stopped describing
+          # what `2.5.6` was verified as, which is the exact failure the comment above this step
+          # says is prevented, and rollback-by-old-manifest had quietly stopped working.
+          #
+          # The neighbouring claim that "GHCR tags are immutable, so a collision is a hard failure
+          # rather than a silent overwrite" is false and has been removed where it appears. GHCR
+          # tag immutability is an opt-in registry setting and is not enabled here. Nothing but
+          # this step stands between a push and a moved release tag.
+          accept='application/vnd.oci.image.index.v1+json'
+          accept="${accept},application/vnd.docker.distribution.manifest.list.v2+json"
+          accept="${accept},application/vnd.oci.image.manifest.v1+json"
+          accept="${accept},application/vnd.docker.distribution.manifest.v2+json"
           code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' \
                  -H "Authorization: Bearer ${token}" \
+                 -H "Accept: ${accept}" \
                  "https://ghcr.io/v2/${path}/manifests/${version}")
 
-          if [ "$code" = "200" ]; then
+          # A REF THAT MAY NOT NAME A RELEASE NEVER PUBLISHES A VERSION TAG, whatever the registry
+          # says. Belt and braces on purpose, and the two halves fail differently: the check above
+          # is about a version that is already taken, this is about a version that is not taken yet
+          # and is being minted from a branch nobody has reviewed. `feat/**` publishes images so a
+          # change can be proved on the estate before it merges (micro-org#270); what it must never
+          # do is mint the name a release manifest will later pin.
+          case "${GITHUB_REF}" in
+            refs/heads/main|refs/heads/release/*) release_ref=true ;;
+            *) release_ref=false ;;
+          esac
+
+          if [ "$release_ref" != "true" ]; then
+            echo "publish_version=false" >> "$GITHUB_OUTPUT"
+            echo "ok: ${GITHUB_REF} may not mint a version tag; publishing sha-${GITHUB_SHA} only."
+          elif [ "$code" = "200" ]; then
             echo "publish_version=false" >> "$GITHUB_OUTPUT"
             echo "::warning::${image}:${version} already exists and will NOT be moved."
             echo "Bump package.json's version to cut a new release; this commit is still published"
             echo "as sha-${GITHUB_SHA} and main."
-          else
+          elif [ "$code" = "404" ]; then
             echo "publish_version=true" >> "$GITHUB_OUTPUT"
-            echo "ok: ${version} is not yet published (HTTP ${code})"
+            echo "ok: ${version} is not yet published (HTTP 404)"
+          else
+            # Anything else is "the registry did not answer the question". Treating that as
+            # "not published" is what turns an outage into a moved release tag, so it does not.
+            echo "publish_version=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not establish whether ${image}:${version} exists (HTTP ${code})."
+            echo "Withholding the version tag rather than risking a move; sha-${GITHUB_SHA} is published."
           fi
 
       - uses: docker/setup-buildx-action@v3
@@ -375,10 +432,18 @@ jobs:
           path="${image#ghcr.io/}"
           token=$(curl -s -m 10 "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" \
                   | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          # ONE `Accept` header listing every acceptable type, not one header per type. Two `Accept`
+          # headers is not a syntax error and is not obviously wrong at a glance, but which of them
+          # a server honours is its own business — and asking for a multi-arch index in a header the
+          # registry ignores is how the `immutable` step above spent its entire life getting 404 for
+          # tags that existed. Same request, same trap, so it is written the same way in both places.
+          accept='application/vnd.oci.image.index.v1+json'
+          accept="${accept},application/vnd.docker.distribution.manifest.list.v2+json"
+          accept="${accept},application/vnd.oci.image.manifest.v1+json"
+          accept="${accept},application/vnd.docker.distribution.manifest.v2+json"
           code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' \
                  -H "Authorization: Bearer ${token}" \
-                 -H 'Accept: application/vnd.oci.image.index.v1+json' \
-                 -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+                 -H "Accept: ${accept}" \
                  "https://ghcr.io/v2/${path}/manifests/sha-${GITHUB_SHA}")
 
           {
@@ -387,11 +452,18 @@ jobs:
             echo "| tag | |"
             echo "| --- | --- |"
             echo "| \`sha-${GITHUB_SHA}\` | pushed |"
-            echo "| \`main\` | pushed |"
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              echo "| \`main\` | pushed |"
+            else
+              echo "| \`main\` | **not moved** — this is not \`refs/heads/main\` |"
+            fi
             if [ "${{ steps.immutable.outputs.publish_version }}" = "true" ]; then
               echo "| \`${{ steps.tags.outputs.version }}\` | pushed — this commit is a release |"
             else
-              echo "| \`${{ steps.tags.outputs.version }}\` | **not moved** — already published |"
+              # WHY it was withheld matters to whoever reads this: "already published" is a normal
+              # unbumped commit, "this ref may not" is a branch build, and the third case is the
+              # registry declining to answer — which needs looking at, not ignoring.
+              echo "| \`${{ steps.tags.outputs.version }}\` | **not moved** — see the log for which of the three reasons |"
             fi
             echo ""
             echo "digest: \`${{ steps.push.outputs.digest }}\`"
