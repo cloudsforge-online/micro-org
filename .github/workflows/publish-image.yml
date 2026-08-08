@@ -133,7 +133,7 @@ jobs:
     # producer that will push from any ref that happens to call it is one mis-copied caller away
     # from putting a branch build behind the `main` tag. A pull request from a fork cannot reach
     # here at all — a fork's token is read-only regardless of what the caller asks for — and this
-    # also refuses a push on any branch but main.
+    # also refuses a push on any branch the list below does not name.
     # `design-system/*` is admitted alongside main, and narrowly: a redesign has to be SEEN on
     # testnet before anyone can judge it, and a branch that cannot produce an image cannot be
     # deployed anywhere. Merging to main first would defeat the point of reviewing on a branch.
@@ -146,19 +146,33 @@ jobs:
     # the other way round: "build and publish from your branch a common version for all containers
     # when you update one", and that rule was not expressible until this line changed.
     #
+    # `feat/*` is admitted on the same argument, and it is the ordinary case the other two are
+    # special cases of: the owner's rule is that a change is proved on a deployed estate before it
+    # merges, and the estate deploys images rather than source. A feature branch that cannot
+    # produce an image cannot be proved, so the only way to test it is to merge it first — which
+    # is the thing the rule exists to prevent. A feature branch does not normally bump the version,
+    # so what it publishes is `sha-<sha>`, which is exactly the tag a one-off deploy should pin.
+    #
     # Safe against the one thing that could go wrong — a branch build sitting behind a tag main
-    # will later want — because the tag is `package.json`'s version and every design or release
-    # branch carries a version main does not. GHCR tags are immutable, so a collision is a hard
-    # failure rather than a silent overwrite: it cannot quietly replace a released image. A
-    # `release/*` branch whose version bump was forgotten therefore fails loudly at the push rather
-    # than pinning last release's image, which is exactly the failure the design overlay's own
-    # header warns about ("A TAG HERE MUST DIFFER FROM THE ONE ON main").
+    # will later want — on TWO counts now, because until the tag list was gated only the first held
+    # and it did not cover the case it claimed to:
+    #
+    #   1. The version tag is `package.json`'s and GHCR tags are immutable, so a collision is a hard
+    #      failure rather than a silent overwrite: it cannot quietly replace a released image. A
+    #      `release/*` branch whose version bump was forgotten fails loudly at the push rather than
+    #      pinning last release's image, which is exactly the failure the design overlay's own
+    #      header warns about ("A TAG HERE MUST DIFFER FROM THE ONE ON main").
+    #   2. The `main` tag is now pushed only from `refs/heads/main`. It used to be pushed
+    #      unconditionally, which meant every admitted branch moved it — the precise hazard this
+    #      comment block opens by naming, sitting in the tag list underneath it the whole time.
+    #      Admitting a fourth branch pattern without fixing that would have made a rare accident
+    #      into a routine one.
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
-      startsWith(github.ref, 'refs/heads/release/'))
+      startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/'))
 
     permissions:
       contents: read
@@ -212,7 +226,12 @@ jobs:
       #   sha-<sha>   the full commit sha. Always unique, always safe to push, and the only tag that
       #               can answer "what code is this" for a commit that did not bump the version.
       #   main        the moving head of the branch, which is what a compose file without a manifest
-      #               defaults to. It is expected to move; that is its whole job.
+      #               defaults to. It is expected to move; that is its whole job — but only when the
+      #               push really is on main. PUSHED ONLY FROM `refs/heads/main`, because a branch
+      #               build wearing this tag is the exact failure the job's own `if:` describes
+      #               itself as defending against, and until this was gated the tag list handed it
+      #               back: every `design-system/*` and `release/*` push moved `main` to its own
+      #               image. Nothing pinned it, so nothing noticed.
       #
       # NOT `latest`. `latest` on a service image means "whatever was built most recently by
       # anything", which is the tag that makes "the artefact that was tested is not the artefact
@@ -331,7 +350,7 @@ jobs:
           push: true
           tags: |
             ${{ steps.tags.outputs.image }}:sha-${{ github.sha }}
-            ${{ steps.tags.outputs.image }}:main
+            ${{ github.ref == 'refs/heads/main' && format('{0}:main', steps.tags.outputs.image) || '' }}
             ${{ steps.immutable.outputs.publish_version == 'true' && format('{0}:{1}', steps.tags.outputs.image, steps.tags.outputs.version) || '' }}
           # `image.source` is what LINKS the package to this repository, and the link is what gives
           # the package the repository's visibility. Without it a new package is an orphan that
