@@ -34,6 +34,7 @@ import { describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { blankComments } from '../.github/actions/source-scan/source-scan.mjs'
 
 const DIR = fileURLToPath(new URL('../.github/workflows/', import.meta.url))
 const FILES = readdirSync(DIR).filter((f) => f.endsWith('.yml'))
@@ -120,15 +121,42 @@ test('a multi-line pipeline is judged whole, not by its first line', () => {
 /* --------------------- guards that read prose ------------------------ */
 
 /**
- * A grep over source that is meant to find CODE must not see comments. Each of these strips first;
- * the assertion is that they still do.
+ * A grep over source that is meant to find CODE must not see comments.
+ *
+ * THIS TEST USED TO ASSERT ONE GUARD — that rule 1 declared a `strip_comments()` — and passed
+ * throughout, while six other guards in the same two files scanned raw source. Asserting that one
+ * repair is still present is not the same as asserting the defect is absent, and the difference is
+ * how micro-org#303 reached seven occurrences with a test named for it already green.
+ *
+ * So it is inverted: the assertion is now that NO workflow here scans source with a shell at all.
+ * Each guard is a step using `.github/actions/source-scan`, and each is proved in both directions
+ * — green on the rule written down in prose, red on the real violation — against the configuration
+ * read out of the workflow, in test/source-scan.test.ts.
  */
-test('every source-scanning guard strips comments before matching', () => {
-  const service = readFileSync(DIR + 'service-ci.yml', 'utf8')
-  assert.match(service, /strip_comments\(\)/, 'rule 1 must strip comments')
+test('no workflow here scans source with a shell, because one place implements that', () => {
+  // Read through the comment blanker, for the reason the whole change exists: this file's own
+  // prose quotes the constructs it forbids, and a checker that matched its own explanation would
+  // be the very bug it checks for.
+  for (const file of FILES) {
+    const yaml = blankComments(readFileSync(DIR + file, 'utf8'), { syntax: 'hash' })
+    assert.doesNotMatch(yaml, /strip_comments\(\)/, `${file} re-implements comment stripping`)
+    assert.doesNotMatch(
+      yaml,
+      /grep -vE ':\[0-9\]\+:\\s\*\(\/\/\|/,
+      `${file} uses the line-prefix filter, which misses a trailing comment`,
+    )
+  }
+})
+
+test('the guards that read source are steps of the shared action', () => {
+  const service = blankComments(readFileSync(DIR + 'service-ci.yml', 'utf8'), { syntax: 'hash' })
+  const web = blankComments(readFileSync(DIR + 'web-ci.yml', 'utf8'), { syntax: 'hash' })
+  const uses = /uses: cloudsforge-online\/micro-org\/\.github\/actions\/source-scan@main/g
+  assert.equal((service.match(uses) ?? []).length, 7, 'service-ci declares seven source guards')
+  assert.equal((web.match(uses) ?? []).length, 2, 'web-ci declares two')
   assert.match(
     service,
-    /! -name '\*\.test\.\*' ! -name '\*\.spec\.\*'/,
+    /exclude-files: '\\\.\(test\|spec\)\\\.'/,
     'rule 1 must skip tests, where naming a foreign variable is the point',
   )
 })

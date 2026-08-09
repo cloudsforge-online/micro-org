@@ -854,109 +854,87 @@ jobs:
       # because it was awkward to break, not because anything stopped you. A second connection
       # string in a repository is the first step of every distributed monolith ever built, and
       # once one service reads another's schema, neither can migrate independently again.
-      - name: One database, and only its own
+      # The variable this service is entitled to read, resolved once and used by the two guards
+      # below. It is a PREFIX question, not a string equality one: a service's own TEST database is
+      # its own database. The check used to compare against `$want` exactly, so
+      # `LEDGER_TEST_DATABASE_URL` — which every testsupport.ts in the estate reads, by
+      # construction — counted as "another service's database". Rule 1 as written rejected all
+      # fifteen services it was meant to protect, and nobody had noticed because no repository's CI
+      # had run this workflow yet.
+      - name: The database variable this service declares
+        id: dbvar
         env:
           SERVICE: ${{ inputs.service }}
           DECLARED: ${{ inputs.database-env-var }}
         run: |
           set -uo pipefail
-          src="${{ inputs.source-dir }}"
           want="$DECLARED"
           if [ -z "$want" ]; then
             want="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
           fi
-          [ -d "$src" ] || { echo "::error::${src}/ does not exist"; exit 1; }
+          {
+            echo "want=$want"
+            echo "prefix=${want%_DATABASE_URL}"
+          } >> "$GITHUB_OUTPUT"
+          echo "ok: ${SERVICE} declares ${want}"
 
-          # Every *_DATABASE_URL / *_DB_URL style variable the source reads.
-          #
-          # Comment bodies are stripped first. The check used to grep raw source, so writing
-          # `LEDGER_DATABASE_URL` inside a comment explaining why this service does NOT read the
-          # ledger's database failed the build — the rule fired on its own rationale. That is the
-          # same defect the web template's nginx guard had, and it has the same consequence:
-          # engineers learn to delete the explanation rather than write it, and the codebase loses
-          # precisely the comments that make a boundary survive a reviewer who was not there when
-          # it was drawn. A rule that punishes documenting the rule is worse than no rule.
-          # MULTI-LINE blocks matter more than line comments here: this estate documents every
-          # boundary in a `/** ... */` header, which is exactly where a sibling service's variable
-          # name gets written down. A stripper that only handled `//` would miss the common case.
-          strip_comments() {
-            awk '
-              { line = $0; out = ""
-                while (length(line) > 0) {
-                  if (inblock) {
-                    i = index(line, "*/")
-                    if (i == 0) { line = ""; break }
-                    inblock = 0; line = substr(line, i + 2); continue
-                  }
-                  b = index(line, "/*"); l = index(line, "//")
-                  if (l > 0 && (b == 0 || l < b)) { out = out substr(line, 1, l - 1); line = ""; break }
-                  if (b > 0) { out = out substr(line, 1, b - 1); line = substr(line, b + 2); inblock = 1; continue }
-                  out = out line; line = ""
-                }
-                print out
-              }' "$1"
-          }
+      # Every *_DATABASE_URL / *_DB_URL style variable the source reads, judged against the
+      # namespace this service owns.
+      #
+      # COMMENTS ARE BLANKED BY THE ACTION, not by an `awk` written here. Writing
+      # `LEDGER_DATABASE_URL` inside a comment explaining why this service does NOT read the
+      # ledger's database used to fail the build — the rule fired on its own rationale — and the
+      # `awk` that fixed it was the first of seven independent repairs of one defect across this
+      # estate (micro-org#303). That `awk` also had the failure mode that is worse than the bug: it
+      # was not string-aware, so it treated the slashes in `'postgres://…'` as opening a comment
+      # and blanked the rest of the line, which silently weakened this very guard. The shared
+      # implementation is string-aware and has that case pinned as a regression test.
+      #
+      # Test files are excluded. A test is where a service legitimately NAMES another service's
+      # variable — to prove it is ignored. micro-market has precisely that test, and had to
+      # assemble the name from `['LEDGER','DATABASE','URL'].join('_')` to get past this check: the
+      # rule forced a test that agrees with the rule to obscure what it asserts.
+      - name: One database, and only its own
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: '\b[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)\b'
+          allow-match: '^${{ steps.dbvar.outputs.prefix }}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$'
+          exclude-files: '\.(test|spec)\.'
+          title: ${{ inputs.service }} reads a database that is not its own
+          ok: 'ok: reads ${{ steps.dbvar.outputs.want }} and nothing else'
+          guidance: |
+            Rule 1: a service owns exactly one database and reads no other. The answer to needing
+            another service's data is an HTTP call typed by a published contract, never a second DSN.
 
-          # Test files are excluded, exactly as the hard-coded-DSN check below already excludes
-          # them. A test is where a service legitimately NAMES another service's variable — to
-          # prove it is ignored. micro-market has precisely that test, and had to assemble the name
-          # from `['LEDGER','DATABASE','URL'].join('_')` to get past this check: the rule forced a
-          # test that agrees with the rule to obscure what it asserts. Two of the three defects
-          # found in this file were this same shape, a check that reads text rather than meaning.
-          stripped=$(mktemp -d)
-          while IFS= read -r f; do
-            mkdir -p "$stripped/$(dirname "$f")"
-            strip_comments "$f" > "$stripped/$f"
-          done < <(find "$src" -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' \) \
-                     ! -name '*.test.*' ! -name '*.spec.*' -print)
-
-          read_vars=$(grep -rhoE '[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)' "$stripped" 2>/dev/null | sort -u || true)
-          # A service's own TEST database is its own database. The check compared against `$want`
-          # by exact string, so `LEDGER_TEST_DATABASE_URL` — which every testsupport.ts in the
-          # estate reads, by construction — counted as "another service's database" and failed the
-          # build. Rule 1 as written rejected all fifteen services it was meant to protect, and
-          # nobody had noticed because no repository's CI had run this workflow yet.
-          #
-          # The rule's actual intent is a PREFIX question: does this source read a database
-          # belonging to a service that is not this one? So the comparison is on the namespace.
-          prefix="${want%_DATABASE_URL}"
-          others=$(printf '%s\n' "$read_vars" \
-                   | grep -vxE "${prefix}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)" \
-                   | grep -v '^$' || true)
-          if [ -n "$others" ]; then
-            echo "::error::${SERVICE} reads a database that is not its own: $(echo "$others" | tr '\n' ' ')"
-            echo "Rule 1: a service owns exactly one database and reads no other. The answer to needing"
-            echo "another service's data is an HTTP call typed by a published contract, never a second DSN."
-            exit 1
-          fi
-
-          # A hard-coded DSN bypasses the variable check entirely, and is also a credential in a
-          # repository. Tests and examples are exempt; they point at throwaway databases.
-          #
-          # `testsupport.ts` IS a test file, and the exemption above already describes it exactly —
-          # it is the estate's convention name for the fixtures a suite shares, it is imported by
-          # nothing but `*.test.ts`, and the DSN in it is a loopback address for a database that
-          # lives for the length of one run. It was excluded from the READ-VARS half of this rule
-          # by the prefix comparison and from the SCOPE AUDIT in this same file (which skips
-          # /testsupport|node_modules|dist/), and only this one grep still counted it as source. So
-          # two checks in one file disagreed about whether it is test code, and the third read it
-          # the way that fails correct work: micro-studio's `BASE_ENV` fixture — four values a
-          # `loadEnv` test needs to be otherwise valid — would have failed the build.
-          #
-          # THAT FAILURE MODE IS THE ONE THIS FILE HAS ALREADY BEEN BITTEN BY TWICE. The rule
-          # against reading another service's database once forced micro-market to spell a variable
-          # as `['LEDGER','DATABASE','URL'].join('_')` to get a test that AGREES with the rule past
-          # the rule. A guard that makes correct code contort is a guard people learn to route
-          # around, and the route around this one would be to obscure the fixture — which loses the
-          # only thing that made it readable.
-          literals=$(grep -rnE '(postgres|postgresql|mysql)://[a-zA-Z0-9_]+:' "$src" 2>/dev/null \
-                     | grep -vE '\.(test|spec)\.[jt]s' | grep -v 'testsupport' | grep -v 'example' || true)
-          if [ -n "$literals" ]; then
-            echo "::error::a connection string is written into the source:"
-            echo "$literals"
-            exit 1
-          fi
-          echo "ok: reads $want and nothing else"
+      # A hard-coded DSN bypasses the variable check entirely, and is also a credential in a
+      # repository. Tests and examples are exempt; they point at throwaway databases.
+      #
+      # `testsupport.ts` IS a test file, and the exemption already describes it exactly — it is the
+      # estate's convention name for the fixtures a suite shares, it is imported by nothing but
+      # `*.test.ts`, and the DSN in it is a loopback address for a database that lives for the
+      # length of one run. It was excluded from the READ-VARS half of this rule by the prefix
+      # comparison and from the SCOPE AUDIT in this same file (which skips
+      # /testsupport|node_modules|dist/), and only this one grep still counted it as source. So two
+      # checks in one file disagreed about whether it is test code, and the third read it the way
+      # that fails correct work: micro-studio's `BASE_ENV` fixture — four values a `loadEnv` test
+      # needs to be otherwise valid — would have failed the build.
+      #
+      # A DSN inside a COMMENT is not caught here, and that is deliberate rather than a gap: an
+      # example connection string in prose is documentation, and secret-hygiene.yml scans comments
+      # and everything else for credentials that are real. The two guards divide the work on
+      # purpose, and secret-hygiene.yml must never adopt comment blanking for that reason.
+      - name: No connection string written into the source
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: '(postgres|postgresql|mysql)://[a-zA-Z0-9_]+:'
+          exclude-files: '\.(test|spec)\.[jt]s|testsupport|example'
+          title: a connection string is written into the source
+          ok: 'ok: no connection string in ${{ inputs.source-dir }}'
+          guidance: |
+            A DSN in source is a credential in a repository and a database this service can reach
+            without declaring it. Read it from the environment.
 
       # Rule 2 — no service imports another service's source.
       #
@@ -964,47 +942,53 @@ jobs:
       # the first time a 'shared helper' is convenient: a path import into a sibling checkout, or
       # a package in the @cloudsforge scope that is really a service's internals. The answer is a
       # package in micro-runtime, or duplication. Never a cross-repo path import.
-      - name: No cross-service source imports
-        run: |
-          set -uo pipefail
-          src="${{ inputs.source-dir }}"
-          failed=0
+      # Three separate steps, and the second and third run even when an earlier one has failed.
+      # This was one step that collected all three answers before exiting, and that property is
+      # worth keeping: a contributor fixing one import wants to see the other two in the same run,
+      # not one per push. `!cancelled()` is the narrowest way to say it — the only steps ahead of
+      # these in the job are the checkout and the two guards above.
+      - name: No import escapes this repository
+        if: ${{ !cancelled() }}
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: "from '(\\.\\./){3,}"
+          title: an import escapes this repository
+          ok: 'ok: no import climbs out of this repository'
+          guidance: |
+            A relative import climbing three or more levels has left this checkout. The answer is a
+            package in micro-runtime, or duplication. Never a cross-repo path import.
 
-          # A relative import climbing three or more levels has left this repository.
-          escapes=$(grep -rnE "from '(\.\./){3,}" "$src" 2>/dev/null || true)
-          if [ -n "$escapes" ]; then
-            echo "::error::an import escapes this repository:"
-            echo "$escapes"
-            failed=1
-          fi
+      - name: No import reaches into another repository's checkout
+        if: ${{ !cancelled() }}
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: "from '[^']*(repos|micro)/[a-z0-9-]+/(src|services|packages)"
+          title: an import reaches into another repository's checkout
+          ok: 'ok: no import names a sibling checkout'
+          guidance: |
+            A path import naming another checkout compiles on one machine and on no other.
 
-          # A path import naming another checkout by name.
-          siblings=$(grep -rnE "from '[^']*(repos|micro)/[a-z0-9-]+/(src|services|packages)" "$src" 2>/dev/null || true)
-          if [ -n "$siblings" ]; then
-            echo "::error::an import reaches into another repository's checkout:"
-            echo "$siblings"
-            failed=1
-          fi
-
-          # The @cloudsforge scope is for published contracts and runtime libraries only. This
-          # list is the same one in micro-org tools/registry.ts (ALLOWED_SCOPED_PACKAGES); cfctl
-          # doctor checks package.json against it, and this checks the imports.
-          allowed='contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|secrets|policy-client|ui|ui-charts|sdk|cli|hearth-node'
-          # Quoted only. An unquoted @cloudsforge/x in prose is a comment naming a package, and a
-          # check that cannot tell those apart is a check people learn to work around by
-          # rewording comments.
-          scoped=$(grep -rhoE "['\"]@cloudsforge/[a-z0-9-]+['\"]" "$src" 2>/dev/null | tr -d "'\"" | sort -u || true)
-          # `|| true` for the reason given at rule 1: a filter that removes everything exits 1,
-          # and removing everything is what a compliant service looks like.
-          bad=$(printf '%s\n' "$scoped" | grep -vE "^@cloudsforge/($allowed)$" | grep -v '^$' || true)
-          if [ -n "$bad" ]; then
-            echo "::error::not a published contract or runtime package: $(echo "$bad" | tr '\n' ' ')"
-            echo "A cross-service import wearing a package name is still a cross-service import."
-            failed=1
-          fi
-
-          [ "$failed" = "0" ] || exit 1
-          echo "ok: no cross-service source imports"
+      # The @cloudsforge scope is for published contracts and runtime libraries only. The allow
+      # list is the same one in micro-org tools/registry.ts (ALLOWED_SCOPED_PACKAGES); cfctl doctor
+      # checks package.json against it, and this checks the imports.
+      #
+      # Quoted only, and comments are blanked before matching. Both halves are needed. The quoting
+      # requirement alone was the previous mitigation, and it fails the moment prose quotes the
+      # package it is telling you not to import — which is the natural way to write that sentence.
+      - name: Only published contract and runtime packages
+        if: ${{ !cancelled() }}
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: "['\"]@cloudsforge/[a-z0-9-]+['\"]"
+          allow-match: "^['\"]@cloudsforge/(contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|secrets|policy-client|ui|ui-charts|sdk|cli|hearth-node)['\"]$"
+          title: not a published contract or runtime package
+          ok: 'ok: every @cloudsforge import is a published package'
+          guidance: |
+            A cross-service import wearing a package name is still a cross-service import.
+            The allow list lives in micro-org tools/registry.ts (ALLOWED_SCOPED_PACKAGES).
 
       # Rule 4 — every service exposes /livez, /readyz and /metrics.
       #
@@ -1034,23 +1018,30 @@ jobs:
       # every secret in the file, so a compromise of the marketing site handed over the custody
       # master secret. A repository declares the variables it needs; the deploy provides exactly
       # those.
+      #
+      # A compose file's comments are blanked too — `#` after whitespace, YAML's own rule. This
+      # guard is the clearest remaining case of micro-org#303 outside TypeScript: the sentence a
+      # maintainer would naturally write, `# never use env_file: .env — rule 9`, matched the first
+      # alternative below and failed the build for saying so.
       - name: No env_file fan-out
-        run: |
-          set -uo pipefail
-          files=$(git ls-files | grep -E '(docker-)?compose.*\.ya?ml$' || true)
-          [ -n "$files" ] || { echo "ok: no compose files in this repository"; exit 0; }
-          bad=''
-          for file in $files; do
-            hits=$(grep -nE "env_file:\s*\.?/?\.env\s*$|^\s*-\s*\.?/?\.env\s*$" "$file" || true)
-            [ -n "$hits" ] && bad="$bad\n$file:\n$hits"
-          done
-          if [ -n "$bad" ]; then
-            echo "::error::a compose file hands this container the whole estate's .env"
-            printf '%b\n' "$bad"
-            echo "Name the variables, or point at .env.${{ inputs.service }}. Rule 9."
-            exit 1
-          fi
-          echo "ok: no env_file fan-out"
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: .
+          extensions: yml,yaml
+          include-files: '(docker-)?compose[^/]*\.ya?ml$'
+          empty-scan: ok
+          # `[ \t]` rather than `\s`, because `\s` matches a newline in JavaScript and these two
+          # alternatives are line-anchored. The `m` flag is what makes `^` and `$` mean what they
+          # meant to the line-based grep this replaces.
+          pattern: 'env_file:[ \t]*\.?/?\.env[ \t]*$|^[ \t]*-[ \t]*\.?/?\.env[ \t]*$'
+          flags: m
+          title: a compose file hands this container the whole estate's .env
+          ok: 'ok: no env_file fan-out'
+          guidance: |
+            Rule 9: name the variables, or point at .env.${{ inputs.service }}. The estate's
+            highest-severity finding and close to free to fix — every container received every
+            secret in the file, so a compromise of the marketing site handed over the custody
+            master secret.
 
       # `.env.example` states the port the service actually defaults to.
       #
@@ -1093,27 +1084,30 @@ jobs:
       # both timers fire, both claim the same work, and for a withdrawal that means two
       # signatures against one nonce, which loses a payment permanently. The lease key names the
       # contended resource, not the row.
+      # A call, not a mention: `setInterval(` rather than `setInterval`, and never in prose. The
+      # rule has to be explainable in a comment without the comment failing the build.
+      #
+      # This step used to strip comments itself, with `grep -vE ':[0-9]+:\s*(//|\*|/\*)'`, and that
+      # is only half a fix: it drops a line that BEGINS with a comment, so a trailing
+      # `stop() // never setInterval() here` still failed the build, and so did any block-comment
+      # body whose continuation lines do not start with an asterisk. The shared action blanks
+      # comment TEXT instead, which keeps the code on a line that also carries prose.
       - name: No setInterval doing domain work
-        run: |
-          set -uo pipefail
-          src="${{ inputs.source-dir }}"
-          # A call, not a mention: 'setInterval(' rather than 'setInterval', and never on a line
-          # that is a comment. The rule has to be explainable in a comment without the comment
-          # failing the build.
-          hits=$(grep -rnE 'setInterval\s*\(' "$src" 2>/dev/null \
-                 | grep -vE '\.(test|spec)\.[jt]s' \
-                 | grep -vE ':[0-9]+:\s*(//|\*|/\*)' \
-                 | grep -v 'cfctl-allow setInterval' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::setInterval in ${{ inputs.service }}:"
-            echo "$hits"
-            echo ""
-            echo "Rule 8: background work is a leased job claimed FOR UPDATE SKIP LOCKED"
-            echo "(@cloudsforge/jobs). If this timer genuinely does no domain work — a metrics"
-            echo "flush, a cache sweep — mark the line 'cfctl-allow setInterval' and say why."
-            exit 1
-          fi
-          echo "ok: no unmarked setInterval"
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: ${{ inputs.source-dir }}
+          pattern: 'setInterval\s*\('
+          exclude-files: '\.(test|spec)\.[jt]s'
+          allow-line: 'cfctl-allow setInterval'
+          title: setInterval in ${{ inputs.service }}
+          ok: 'ok: no unmarked setInterval'
+          guidance: |
+            Rule 8: background work is a leased job claimed FOR UPDATE SKIP LOCKED
+            (@cloudsforge/jobs). setInterval doing domain work is correct with exactly one replica
+            and wrong with two: both timers fire, both claim the same work, and for a withdrawal
+            that means two signatures against one nonce, which loses a payment permanently.
+            If this timer genuinely does no domain work — a metrics flush, a cache sweep — mark the
+            line 'cfctl-allow setInterval' and say why.
 
       # ---------------------------------------------------------------- README --
       - name: The repository documents itself

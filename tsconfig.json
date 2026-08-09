@@ -1,7 +1,10 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "noEmit": true },
-  "include": ["tools/**/*.ts", "test/**/*.ts"],
+  // The source-scan action is plain `.mjs` because GitHub runs it on the runner's own Node, with
+  // no install and no loader — so it cannot be TypeScript. `checkJs` is how it is still typechecked
+  // here rather than only at the moment thirty-three repositories call it.
+  "compilerOptions": { "noEmit": true, "allowJs": true, "checkJs": true },
+  "include": ["tools/**/*.ts", "test/**/*.ts", ".github/actions/**/*.mjs"],
   // The fixtures are inputs to the compatibility checker, not sources of this repository. Several
   // of them declare the same type name with a deliberately different shape, and one pair exists
   // only to be rejected. Compiling them here would say nothing about whether the checker works.

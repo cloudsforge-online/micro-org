@@ -296,10 +296,17 @@ test('reading ANOTHER service\'s database is still rejected — the rule keeps i
 })
 
 test('the workflow\'s own expression matches the one asserted here', () => {
-  // If the shell is edited without editing ALLOWED above, every test in this file goes on passing
-  // while testing nothing. This is the line that stops that.
-  assert.match(WORKFLOW, /\$\{prefix\}_\(TEST_\)\?\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)/)
-  assert.match(WORKFLOW, /prefix="\$\{want%_DATABASE_URL\}"/)
+  // If the workflow is edited without editing ALLOWED above, every test in this file goes on
+  // passing while testing nothing. This is the line that stops that.
+  //
+  // The comparison used to be a shell `grep -vxE` against a `$prefix`; it is now the `allow-match:`
+  // of a source-scan step (micro-org#303), and the prefix is a step output rather than a shell
+  // variable. The same two halves are asserted: the namespace, and the TEST_ that belongs to it.
+  assert.match(
+    WORKFLOW,
+    /allow-match: '\^\$\{\{ steps\.dbvar\.outputs\.prefix \}\}_\(TEST_\)\?\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)\$'/,
+  )
+  assert.match(WORKFLOW, /echo "prefix=\$\{want%_DATABASE_URL\}"/)
 })
 
 /* --------------------------- comment stripping ----------------------- */
@@ -308,12 +315,16 @@ test('rule 1 reads code, not prose', () => {
   // The guard used to grep raw source, so a comment explaining why this service does NOT read the
   // ledger's database failed the build by naming it. A rule that punishes documenting the rule
   // teaches people to delete the documentation. Same defect as the web template's nginx guard.
-  assert.match(WORKFLOW, /strip_comments\(\)/)
-  assert.match(WORKFLOW, /grep -rhoE '\[A-Z\]\[A-Z0-9_\]\*_\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)' "\$stripped"/)
-  assert.doesNotMatch(
+  //
+  // The `awk` that first fixed it is gone: it was the first of seven local repairs of one defect,
+  // and it was not string-aware, so it read the slashes in a URL as opening a comment and blanked
+  // the code after them. Both halves — that prose passes and that code after a URL is still
+  // caught — are exercised against the real step configuration in test/source-scan.test.ts.
+  assert.doesNotMatch(WORKFLOW, /strip_comments\(\)/, 'the local stripper must not come back')
+  assert.match(WORKFLOW, /uses: cloudsforge-online\/micro-org\/\.github\/actions\/source-scan@/)
+  assert.match(
     WORKFLOW,
-    /grep -rhoE '\[A-Z\]\[A-Z0-9_\]\*_\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)' "\$src"/,
-    'the unstripped source must not be scanned again',
+    /pattern: '\\b\[A-Z\]\[A-Z0-9_\]\*_\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)\\b'/,
   )
 })
 
@@ -322,7 +333,7 @@ test('rule 1 does not scan test files, which is where a foreign name is legitima
   // and had to assemble it from ['LEDGER','DATABASE','URL'].join('_') to get past this check — the
   // rule forced a test that agrees with the rule to obscure its own assertion. The hard-coded-DSN
   // check in the same workflow had always exempted tests; this one had not.
-  assert.match(WORKFLOW, /! -name '\*\.test\.\*' ! -name '\*\.spec\.\*'/)
+  assert.match(WORKFLOW, /exclude-files: '\\\.\(test\|spec\)\\\.'/)
 })
 
 /* -------------------------- secret hygiene --------------------------- */

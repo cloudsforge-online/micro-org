@@ -340,8 +340,10 @@ test('service-ci.yml enforces exactly the allowlist registry.ts holds', () => {
   // to forget, which is the defect, not the fix.
   const orgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const workflow = readFileSync(path.join(orgRoot, '.github/workflows/service-ci.yml'), 'utf8');
-  const alternation = workflow.match(/^\s*allowed='([^']+)'/m)?.[1];
-  assert.ok(alternation, "service-ci.yml no longer declares allowed='…' — re-point this test, do not delete it");
+  // The list moved from a shell variable into the `allow-match:` of the source-scan step when the
+  // guards stopped being greps (micro-org#303). Still parsed, still one copy.
+  const alternation = workflow.match(/allow-match:.*@cloudsforge\/\(([a-z0-9|-]+)\)/)?.[1];
+  assert.ok(alternation, 'service-ci.yml no longer declares the scope allow list — re-point this test, do not delete it');
   const inCi = alternation.split('|').map((name) => `@cloudsforge/${name}`);
   assert.deepEqual([...inCi].sort(), [...ALLOWED_SCOPED_PACKAGES].sort());
 });
