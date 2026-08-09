@@ -1,0 +1,11 @@
+# Compose files are scanned because compose interpolation IS shell parameter expansion, and the
+# estate's one surviving finding at the time this check was written lived in exactly this shape:
+# `GF_SECURITY_ADMIN_PASSWORD: ${CF_GRAFANA_ADMIN_PASSWORD:-local-dev-only}` in
+# `deploy/compose/docker-compose.telemetry.yml`.
+
+services:
+  thing:
+    image: example/thing
+    environment:
+      THING_ADMIN_PASSWORD: ${THING_ADMIN_PASSWORD:-local-dev-only}
+      THING_SIGNING_SECRET: ${THING_SIGNING_SECRET:-an-inline-literal-secret}
