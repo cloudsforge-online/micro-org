@@ -141,26 +141,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The `|| true` this step used to need — `git grep` exits 1 when it finds nothing, and a
+      # `run:` block is `bash -e {0}`, so a clean repository killed its own check — is gone with
+      # the shell. That defect and the one below it were the two halves of micro-org#303 and #38:
+      # a check that could not pass, and a check that fails on its own explanation.
+      #
+      # Markup is scanned as well as TypeScript, because Vite substitutes in index.html too. `.md`
+      # is not, as before; `.github/` is excluded so this file can quote the thing it forbids.
       - name: Nothing reads import.meta.env.VITE_*
-        run: |
-          set -uo pipefail
-          # `|| true` is load-bearing: git grep exits 1 when it finds nothing, GitHub runs every
-          # run: block as `bash -e {0}`, and `set -uo pipefail` does not turn -e off. Without it the
-          # assignment aborts the step on exactly the repositories that deserve to pass — the check
-          # was red on every clean frontend and had never passed anywhere. Same defect as the three
-          # in secret-hygiene.yml.
-          hits=$(git grep -nIE 'import\.meta\.env\.VITE_[A-Z0-9_]+' -- . ':!*.md' ':!.github/workflows/*' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::${{ inputs.app }} reads a build-time environment variable:"
-            echo "$hits"
-            echo ""
-            echo "Vite inlines these at build time, so the bundle carries its environment and one image"
-            echo "can no longer serve all of them. Resolve hosts at runtime from window.location"
-            echo "(src/hosts.ts, cloudsforgeHosts()). If this genuinely must be known at build time,"
-            echo "it is a compile-time constant, not an environment variable — write it down as one."
-            exit 1
-          fi
-          echo "ok: no build-time environment variables"
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: .
+          pattern: 'import\.meta\.env\.VITE_[A-Z0-9_]+'
+          extensions: ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,html
+          exclude-files: '^\.github/'
+          title: ${{ inputs.app }} reads a build-time environment variable
+          ok: 'ok: no build-time environment variables'
+          guidance: |
+            Vite inlines these at build time, so the bundle carries its environment and one image
+            can no longer serve all of them. Resolve hosts at runtime from window.location
+            (src/hosts.ts, cloudsforgeHosts()). If this genuinely must be known at build time,
+            it is a compile-time constant, not an environment variable — write it down as one.
 
       # The same property from the other side: a build argument that reaches the bundle bakes an
       # environment into an artifact just as effectively, and is harder to spot in review.
@@ -179,18 +180,25 @@ jobs:
       # AD-21: product analytics is a service fed by the event bus, pseudonymised by construction.
       # A crypto platform sending user behaviour to a third-party ad network contradicts the
       # product's first principle, and a pixel cannot see the server-side funnels anyway.
+      #
+      # This one was the estate's best-primed candidate for the eighth occurrence of #303. A
+      # comment saying "we deliberately load no googletagmanager tag — AD-21" is the natural way to
+      # stop the next person adding one, and it would have failed the build of every frontend that
+      # carried it. Strings are NOT blanked here, on purpose: the violation IS a string, a
+      # `<script src="https://www.googletagmanager.com/…">`.
       - name: No third-party analytics tag
-        run: |
-          set -uo pipefail
-          hits=$(git grep -nIE 'googletagmanager|google-analytics\.com|gtag\(|segment\.(com|io)/analytics|hotjar|mixpanel' \
-                 -- . ':!*.md' ':!.github/workflows/*' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::a third-party analytics tag:"
-            echo "$hits"
-            echo "Product analytics is micro-analytics, fed by the event bus. AD-21."
-            exit 1
-          fi
-          echo "ok: no third-party tags"
+        uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+        with:
+          paths: .
+          pattern: 'googletagmanager|google-analytics\.com|gtag\(|segment\.(com|io)/analytics|hotjar|mixpanel'
+          extensions: ts,tsx,js,jsx,mjs,cjs,mts,cts,vue,svelte,html
+          exclude-files: '^\.github/'
+          title: a third-party analytics tag
+          ok: 'ok: no third-party tags'
+          guidance: |
+            Product analytics is micro-analytics, fed by the event bus. AD-21. A crypto platform
+            sending user behaviour to a third-party ad network contradicts the product's first
+            principle, and a pixel cannot see the server-side funnels anyway.
 
       # ---------------------------------------------------------------- README --
       - name: The repository documents itself

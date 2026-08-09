@@ -1,0 +1,96 @@
+name: source-scan
+description: >-
+  Fail the build when a forbidden construct appears in SOURCE — and not when it appears in the
+  comment explaining why it is forbidden. The estate's one implementation of that rule
+  (micro-org#303); the reasoning is in source-scan.mjs.
+
+# HOW TO CALL IT FROM ANY REPOSITORY IN THE ESTATE
+#
+#   - uses: cloudsforge-online/micro-org/.github/actions/source-scan@main
+#     with:
+#       paths: src
+#       pattern: 'setInterval\s*\('
+#       title: a background timer that is not a leased job
+#       guidance: |
+#         Rule 8: background work is claimed FOR UPDATE SKIP LOCKED (@cloudsforge/jobs).
+#
+# `pattern` is a JavaScript regular expression, not an ERE. Almost every ERE in this estate is
+# already valid JavaScript; the differences that matter are `[[:space:]]`, which is `\s`, and
+# back-references. In exchange you get lookahead, which is how an allow-list becomes one pattern
+# instead of a `grep -v` chain.
+#
+# Nothing here needs a checkout of micro-org, a package install, or a shell. GitHub fetches this
+# repository for the `uses:` and runs the file on the runner's own Node.
+
+inputs:
+  pattern:
+    description: >-
+      The forbidden construct, as a JavaScript regular expression. Required — an empty pattern
+      exits 2 rather than passing, because a guard that matches nothing is micro-org#38.
+    required: true
+  paths:
+    description: Files or directories to scan, comma- or newline-separated.
+    default: src
+  flags:
+    description: Regular-expression flags. Use `i` for case-insensitive; `g` is implied.
+    default: ''
+  extensions:
+    description: >-
+      Extensions to scan, comma-separated. The default is the JavaScript family. Add `html,vue`
+      for a frontend where the construct can appear in markup.
+    default: ts,tsx,js,jsx,mjs,cjs,mts,cts
+  exclude-files:
+    description: >-
+      A regular expression over the path relative to the scan root; a matching file is not read.
+      node_modules, dist, build, coverage and the rest are already skipped.
+    default: ''
+  include-files:
+    description: >-
+      A regular expression over the path relative to the scan root; only matching files are read.
+      Use it when the guard is about a NAMED kind of file — a compose file, a Dockerfile — rather
+      than about a directory.
+    default: ''
+  empty-scan:
+    description: >-
+      `fail` (default) or `ok`. Matching no file at all looks exactly like passing, and this estate
+      has had twenty-two guards that could not fail (micro-org#38). Set `ok` where a repository
+      with none of these files is a legitimate pass.
+    default: fail
+  allow-match:
+    description: >-
+      A regular expression over the MATCHED TEXT. A match that matches this is exempt — how a
+      guard says "any variable of this shape except my own".
+    default: ''
+  allow-line:
+    description: >-
+      A regular expression over the ORIGINAL line, comments included. The escape hatch marker
+      (`cfctl-allow …`) is read from here on purpose: it is written in a comment, and testing the
+      blanked line would silently delete every exemption in the estate.
+    default: ''
+  ignore-strings:
+    description: >-
+      `true` blanks string bodies as well as comments. OFF by default, because for most guards the
+      string IS the violation — a hostname, a DSN, a script src. Turn it on for identifier rules
+      that must not fire on a UI label.
+    default: 'false'
+  missing-path:
+    description: >-
+      `fail` (default) or `ok`. A guard pointed at a directory that does not exist cannot fail, so
+      that is an error unless the path is declared optional.
+    default: fail
+  working-directory:
+    description: The scan root. Defaults to the workspace.
+    default: ''
+  title:
+    description: The one-line error headline, and the text of each inline annotation.
+    default: ''
+  guidance:
+    description: What to do about it. Printed after the hits, so the reader gets the rule and the remedy.
+    default: ''
+  ok:
+    description: The line printed when the guard passes. Say what was checked, not just "ok".
+    default: ''
+
+runs:
+  using: node20
+  main: source-scan.mjs
