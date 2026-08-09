@@ -4,8 +4,8 @@
 //   cfctl clone                    clone or fast-forward every micro-* repository
 //   cfctl pull                     fast-forward the checkouts that already exist
 //   cfctl doctor                   the checks for the things that actually break
-//   cfctl release <version>        generate releases/<version>.yaml, one image tag per service
-//   cfctl release --verify <v>     check every image the manifest names exists
+//   cfctl release <version>        generate releases/<version>.yaml, one image per service
+//   cfctl release --verify <v>     check every image exists and is still the image that was pinned
 //   cfctl new service <name>       instantiate micro-service-template
 //   cfctl new web <name>           instantiate micro-web-template
 //
@@ -567,6 +567,138 @@ function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' 
   return 'unknown';
 }
 
+// ---------------------------------------------------------------------------------------------
+// What a tag resolves to, which is not the same question as whether it exists
+// ---------------------------------------------------------------------------------------------
+//
+// A RELEASE MANIFEST DID NOT NAME A FIXED ARTIFACT (micro-org#288). It named a tag, and a tag is a
+// mutable pointer that this estate's own machinery moves:
+//
+//   * `publish-image.yml` tags at the repository's package.json version on every push to `main` or
+//     `release/**`. If a `release/X` branch is never merged, `main` stays on the PREVIOUS version,
+//     so the next merge to main republishes the PREVIOUS release's tag from a different commit.
+//     Six repositories did exactly this with 2.5.6, measured 2026-08-09:
+//     `ghcr.io/cloudsforge-online/micro-network-site:2.5.5` resolves to the image built from
+//     `5aa61e4`, a merge that landed after 2.5.5 was cut.
+//   * Merging the release branch republishes the tag too, from the MERGE commit rather than the
+//     commit the manifest pins. The trees are identical so the content is, but the digest need not
+//     be — and the estate pulls by tag.
+//
+// `--verify` could not see either, because `docker manifest inspect` establishes EXISTENCE and
+// existence is all it establishes. So the answer recorded here is the digest, which is the name of
+// the bytes rather than a name pointing at them.
+//
+// THE INDEX DIGEST, not a platform's. `docker manifest inspect --verbose` reports the per-platform
+// manifest digest — for `micro-identity:2.5.7` that is `sha256:c63d5278…`, while the digest the tag
+// itself resolves to is `sha256:d82f87dc…`. The second is the one `docker pull image@sha256:…`
+// takes and the one a deploy would pin, so it is the one recorded. That is why this asks the
+// registry over HTTP rather than shelling out to docker: the registry answers the question in a
+// header, `Docker-Content-Digest`, and answers it for the reference as a whole.
+
+/** The digest a GHCR tag resolves to right now, or — never silently — why it could not be read. */
+export interface DigestAnswer {
+  readonly digest?: string;
+  readonly reason?: string;
+}
+
+/** The `<org>/<package>` path inside a GHCR image reference; undefined for anything else. */
+export function ghcrPath(image: string): string | undefined {
+  const prefix = 'ghcr.io/';
+  if (!image.startsWith(prefix)) return undefined;
+  const rest = image.slice(prefix.length);
+  return /^[^/:@]+\/[^/:@]+$/.test(rest) ? rest : undefined;
+}
+
+// Every media type a GHCR push produces. WITHOUT THIS HEADER the registry is entitled to answer
+// with a converted schema-1 manifest, whose digest is a digest of something else — so the Accept
+// list is part of the question, not a politeness.
+const MANIFEST_ACCEPT = [
+  'application/vnd.oci.image.index.v1+json',
+  'application/vnd.docker.distribution.manifest.list.v2+json',
+  'application/vnd.oci.image.manifest.v1+json',
+  'application/vnd.docker.distribution.manifest.v2+json',
+].join(', ');
+
+/**
+ * The digest out of a raw HTTP response header block.
+ *
+ * Pure, and exported, for the reason `readGhcrTokenAnswer` is: a check whose only test is the
+ * internet is a check that is silently wrong between outages. Header names are case-insensitive
+ * per RFC 9110 and curl reports HTTP/2 headers lower-cased, so the match is too; the line endings
+ * are CRLF and are stripped here rather than by the caller.
+ *
+ * The shape is validated rather than trusted. A truncated or proxied answer that happens to carry
+ * the header name must read as "could not tell", because the one thing this must never do is hand
+ * back a value that a later run will compare against and find different.
+ */
+export function readContentDigest(headers: string): string | undefined {
+  for (const raw of headers.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    const value = /^docker-content-digest:\s*(\S+)$/i.exec(line)?.[1];
+    if (value && /^sha256:[0-9a-f]{64}$/.test(value)) return value;
+  }
+  return undefined;
+}
+
+/** Ask GHCR what `<image>:<tag>` resolves to. Anonymous, like `ghcrVisibility` above. */
+export function ghcrDigest(image: string, tag: string): DigestAnswer {
+  const pkg = ghcrPath(image);
+  if (!pkg) return { reason: `${image} is not a ghcr.io image, and this only knows how to ask GHCR` };
+  if (!hasCommand('curl')) return { reason: 'curl is not available' };
+
+  // The same challenge-response dance ghcrVisibility documents: an anonymous reader fetches a
+  // bearer token first, and a DENIED body is an ANSWER — private, or never published.
+  const tokenResult = run('curl', [
+    '-s',
+    '-m',
+    '8',
+    `https://ghcr.io/token?service=ghcr.io&scope=repository:${pkg}:pull`,
+  ]);
+  if (!tokenResult.ok) return { reason: 'GHCR did not answer the token request' };
+  const answer = readGhcrTokenAnswer(tokenResult.out);
+  if (answer.denied) {
+    return { reason: 'GHCR denied an anonymous pull token — the package is private, or was never published' };
+  }
+  if (!answer.token) return { reason: 'GHCR returned neither a token nor a denial' };
+
+  const head = run('curl', [
+    '-sI',
+    '-m',
+    '15',
+    '-H',
+    `Authorization: Bearer ${answer.token}`,
+    '-H',
+    `Accept: ${MANIFEST_ACCEPT}`,
+    `https://ghcr.io/v2/${pkg}/manifests/${tag}`,
+  ]);
+  if (!head.ok) return { reason: 'GHCR did not answer the manifest request' };
+  const digest = readContentDigest(head.out);
+  if (!digest) return { reason: `GHCR served no digest for :${tag} — the tag does not exist, or it would not serve it` };
+  return { digest };
+}
+
+/**
+ * The four things `--verify` can conclude about one entry, and none of them is a boolean.
+ *
+ *   `verified`   the tag still resolves to the digest the manifest recorded. The only state in
+ *                which this manifest is known to name the artifact it named when it was cut.
+ *   `moved`      it resolves to something else. This is micro-org#288 happening, and it is the
+ *                whole reason the field exists — LOUD, and a failure.
+ *   `unrecorded` the manifest carries no digest for this entry. Every manifest cut before
+ *                2026-08-09 is in this state, and rollback is checking out the previous file, so
+ *                this must stay READABLE and must not fail. It is reported as unverifiable, which
+ *                is what it is: the image exists and nothing here can say it is the right one.
+ *   `unreadable` a digest was recorded and GHCR would not answer. Verification that cannot run is
+ *                not verification, so this is a failure rather than a shrug.
+ */
+export type DigestVerdict = 'verified' | 'moved' | 'unrecorded' | 'unreadable';
+
+export function digestVerdict(recorded: string, answer: DigestAnswer): DigestVerdict {
+  if (recorded === '') return 'unrecorded';
+  if (!answer.digest) return 'unreadable';
+  return answer.digest === recorded ? 'verified' : 'moved';
+}
+
 /**
  * Directories sitting beside this checkout that the registry does not name.
  *
@@ -823,6 +955,19 @@ export interface ManifestService {
   readonly image: string;
   readonly tag: string;
   readonly commit: string;
+  /**
+   * The GHCR digest the tag resolved to when this release was cut, or '' when it is not known.
+   *
+   * REQUIRED IN THE TYPE, EMPTY-ABLE IN THE FILE, and the distinction is the whole design. Every
+   * manifest generated before 2026-08-09 — 2.3.0, 2.4.0, 2.5.2 through 2.5.7 and the ten 2026.08.*
+   * files — has no `digest:` line, and they must go on parsing: rollback is checking out the
+   * previous file, so a parser that rejects them takes the estate's rollback path away. They read
+   * back as '' and `--verify` reports them as unverifiable rather than as verified or as broken.
+   *
+   * Optional in the type would have been the wrong shape. The defect this fixes is a field nobody
+   * recorded; making it a field a caller may forget rebuilds it one construction site at a time.
+   */
+  readonly digest: string;
 }
 
 export interface ReleaseManifest {
@@ -839,6 +984,10 @@ export function renderManifest(manifest: ReleaseManifest): string {
     '# This file replaces CLOUDSFORGE_TAG. With one repository per service there is no shared',
     '# version to name, so a release is the list below: exactly which image of each service is in',
     '# it. Rollback is checking out the previous file. See releases/README.md.',
+    '#',
+    '# `digest` is the artifact. `tag` is a name that pointed at it, and a name this estate moves —',
+    '# see micro-org#288. Verify with `cfctl release --verify`; an entry with no digest predates',
+    '# 2026-08-09 or was cut before its image published, and cannot be verified at all.',
     `version: "${manifest.version}"`,
     `generated: "${manifest.generated}"`,
     'generator: cfctl release',
@@ -851,6 +1000,12 @@ export function renderManifest(manifest: ReleaseManifest): string {
     lines.push(`    image: ${service.image}`);
     lines.push(`    tag: "${service.tag}"`);
     lines.push(`    commit: "${service.commit}"`);
+    // Omitted rather than emitted empty. `digest: ""` in a file would read as a claim that the
+    // image has no digest; the absence of the line is the same thing every manifest before this
+    // one said, and it is what the parser turns back into ''. It is also what keeps this ADDITIVE
+    // for micro-deploy's `scripts/release-render.py`, which mirrors the parser below and pins
+    // `image:tag`: a key it does not know about lands in its dict and is never read.
+    if (service.digest !== '') lines.push(`    digest: "${service.digest}"`);
   }
   lines.push('# Deployables with no checkout on the machine that generated this. Listed rather than');
   lines.push('# omitted: a manifest with a silent hole is how a service gets left on an old image.');
@@ -880,6 +1035,10 @@ export function parseManifest(text: string): ReleaseManifest {
       image: current['image'] ?? '',
       tag: current['tag'] ?? '',
       commit: current['commit'] ?? '',
+      // '' for the eight-plus manifests written before digests existed. A missing digest is a
+      // manifest that cannot be verified, which --verify says out loud; it is not a parse error,
+      // because rollback is checking out the previous file and those files are the rollback.
+      digest: current['digest'] ?? '',
     });
     current = undefined;
   };
@@ -946,6 +1105,8 @@ function cmdRelease(args: Args): number {
 
   const services: ManifestService[] = [];
   const absent: string[] = [];
+  const unresolved: string[] = [];
+  process.stdout.write(`asking GHCR what each tag resolves to (up to ${deployableRepos().length} lookups)\n`);
   for (const repo of deployableRepos()) {
     const checkout = inspect(repo);
     if (checkout.state === 'absent' || checkout.state === 'not-a-repo') {
@@ -961,13 +1122,23 @@ function cmdRelease(args: Args): number {
     }
     const manifest = readManifest(path.join(checkout.dir, 'package.json'));
     const tag = manifest?.version ?? version;
+    const image = imageFor(repo);
+
+    // Resolved HERE, at cut time, rather than left to --verify to discover later. The digest is
+    // evidence of what the tag meant on the day the release was cut, and evidence gathered after
+    // the fact is not evidence: asking a week later would record whatever the tag had drifted to
+    // and call it the release.
+    const answer = ghcrDigest(image, tag);
+    if (!answer.digest) unresolved.push(`${repo.name}: ${answer.reason ?? 'no digest'}`);
+
     services.push({
       name: repo.name,
       repo: repo.repo,
       kind: repo.kind,
-      image: imageFor(repo),
+      image,
       tag,
       commit: git(checkout.dir, ['rev-parse', 'HEAD']).out,
+      digest: answer.digest ?? '',
     });
   }
 
@@ -988,9 +1159,26 @@ function cmdRelease(args: Args): number {
     absent,
   });
   writeFileSync(file, rendered);
+  const withDigest = services.filter((service) => service.digest !== '').length;
   process.stdout.write(`wrote ${path.relative(process.cwd(), file)}: ${services.length} services pinned`);
   process.stdout.write(absent.length > 0 ? `, ${absent.length} absent\n` : '\n');
-  process.stdout.write(`verify it before deploying:  cfctl release --verify ${version}\n`);
+  process.stdout.write(`${withDigest} of ${services.length} entries name an image digest\n`);
+
+  // NOT a failure, and the reasoning is worth having in one place. An image publishes from the
+  // push, so a manifest cut in the minutes before its builds finish has tags that resolve to
+  // nothing yet — refusing would make the tool unusable in exactly the window it is used in. What
+  // it must not do is stay quiet: a tag-only entry is the state this whole change exists to end.
+  if (unresolved.length > 0) {
+    process.stdout.write(
+      `\n::warning::${unresolved.length} of ${services.length} entries have NO digest and are pinned by tag alone:\n`,
+    );
+    for (const line of unresolved) process.stdout.write(`  ${line}\n`);
+    process.stdout.write(
+      'A tag is a name that this estate moves (micro-org#288), so these entries do not name a fixed\n' +
+        `artifact. Once their images have published, re-run:  cfctl release ${version} --force\n`,
+    );
+  }
+  process.stdout.write(`\nverify it before deploying:  cfctl release --verify ${version}\n`);
   return 0;
 }
 
@@ -1014,16 +1202,56 @@ function verifyRelease(file: string): number {
     );
     return 1;
   }
+  const recorded = manifest.services.filter((service) => service.digest !== '').length;
+  if (recorded > 0 && !hasCommand('curl')) {
+    process.stderr.write(
+      'cfctl: curl is not available, so no recorded digest can be checked against GHCR. This\n' +
+        'manifest records digests and the point of recording them is that they are compared —\n' +
+        'refusing to report it as verified on the strength of the images merely existing.\n',
+    );
+    return 1;
+  }
+
   let missing = 0;
+  let moved = 0;
+  let unreadable = 0;
+  let unrecorded = 0;
   for (const service of manifest.services) {
     const reference = `${service.image}:${service.tag}`;
     const result = run('docker', ['manifest', 'inspect', reference]);
-    if (result.ok) {
-      process.stdout.write(`ok: ${reference}\n`);
-    } else {
+    if (!result.ok) {
       missing += 1;
       // A 'denied' here is the GHCR visibility trap, not an absent image. Say both.
       process.stdout.write(`::error::${reference} — ${result.err.split('\n')[0] ?? 'not found'}\n`);
+      continue;
+    }
+
+    // No lookup at all when nothing was recorded: there is nothing to compare against, and a
+    // manifest from before this field existed should not pay 48 network round trips to be told so.
+    const answer: DigestAnswer = service.digest === '' ? {} : ghcrDigest(service.image, service.tag);
+    switch (digestVerdict(service.digest, answer)) {
+      case 'verified':
+        process.stdout.write(`ok: ${reference} @ ${service.digest}\n`);
+        break;
+      case 'moved':
+        moved += 1;
+        // The loudest line this programme emits, because it is the only one that means the file
+        // in front of you is lying about what it deploys.
+        process.stdout.write(
+          `::error::${reference} — THE TAG HAS MOVED. This manifest records ${service.digest}; GHCR ` +
+            `now serves ${answer.digest}. Deploying this file would run an image it did not pin.\n`,
+        );
+        break;
+      case 'unreadable':
+        unreadable += 1;
+        process.stdout.write(
+          `::error::${reference} — records a digest that could not be checked: ${answer.reason ?? 'no answer'}\n`,
+        );
+        break;
+      case 'unrecorded':
+        unrecorded += 1;
+        process.stdout.write(`unverifiable: ${reference} exists, and this manifest records no digest for it\n`);
+        break;
     }
   }
   if (manifest.absent.length > 0) {
@@ -1031,9 +1259,37 @@ function verifyRelease(file: string): number {
   }
   if (missing > 0) {
     process.stdout.write(`\n${missing} of ${manifest.services.length} images cannot be pulled. Do not deploy this manifest.\n`);
-    return 1;
   }
+  if (moved > 0) {
+    process.stdout.write(
+      `\n${moved} of ${manifest.services.length} tags no longer resolve to the image this release pinned.\n` +
+        'This is micro-org#288: an image tag is republished by any later push that carries the same\n' +
+        'package.json version, so the bytes a manifest was verified against are not the bytes the\n' +
+        'tag names today. DO NOT DEPLOY THIS MANIFEST — deploy the digest, or rebuild the release.\n',
+    );
+  }
+  if (unreadable > 0) {
+    process.stdout.write(
+      `\n${unreadable} of ${manifest.services.length} entries record a digest that GHCR would not confirm.\n` +
+        'Verification that cannot run is not verification.\n',
+    );
+  }
+  if (missing > 0 || moved > 0 || unreadable > 0) return 1;
+
+  // Not a failure — every manifest up to and including 2.5.7 is in this state, and they are the
+  // rollback targets. But "all N images exist" was the sentence that let #288 stay invisible for
+  // six repositories, so a manifest that cannot be checked no longer gets to print it unqualified.
   process.stdout.write(`\nall ${manifest.services.length} images exist\n`);
+  if (unrecorded === 0) {
+    process.stdout.write(`all ${manifest.services.length} still resolve to the digest this release recorded\n`);
+    return 0;
+  }
+  process.stdout.write(
+    `${manifest.services.length - unrecorded} verified by digest; ${unrecorded} record no digest and CANNOT BE VERIFIED.\n` +
+      'Their images exist, and nothing here can tell you whether they are the images that were\n' +
+      'released: a tag is republished by any later push carrying the same package.json version\n' +
+      '(micro-org#288). Manifests cut from 2026-08-09 record digests and do not have this hole.\n',
+  );
   return 0;
 }
 

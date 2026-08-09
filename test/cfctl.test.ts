@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
+  digestVerdict,
+  ghcrPath,
   inspect,
   isOrgRemote,
   microRoot,
+  readContentDigest,
   readGhcrTokenAnswer,
   parseManifest,
   portFor,
@@ -358,6 +362,12 @@ test('an unrecognised range is reported, never guessed at', () => {
 
 // -- the release manifest ----------------------------------------------------------------------
 
+// Two real digests, captured from ghcr.io on 2026-08-09 rather than invented: the first is what
+// `micro-identity:2.5.7` resolves to, the second what `micro-hub-web:2.5.7` does. A fixture that
+// is a real answer is the difference between testing this parser and testing a guess about it.
+const LEDGER_DIGEST = 'sha256:d82f87dc83bca045a20b5f49fb367b62fa780ce99a2ba696d5546fa7976e4d8b';
+const HUB_WEB_DIGEST = 'sha256:f9348c23c5eb0afd980f1faeca4fd793122f1ce2479d39d3de78cf9c8175e156';
+
 const MANIFEST: ReleaseManifest = {
   version: '2026.08.0',
   generated: '2026-07-30T09:00:00.000Z',
@@ -369,6 +379,7 @@ const MANIFEST: ReleaseManifest = {
       image: 'ghcr.io/cloudsforge-online/micro-ledger',
       tag: '1.4.2',
       commit: '9f1c0b2a44de',
+      digest: LEDGER_DIGEST,
     },
     {
       name: 'hub-web',
@@ -377,6 +388,7 @@ const MANIFEST: ReleaseManifest = {
       image: 'ghcr.io/cloudsforge-online/micro-hub-web',
       tag: '2.0.0',
       commit: 'aa11bb22cc33',
+      digest: HUB_WEB_DIGEST,
     },
   ],
   absent: ['market', 'analytics'],
@@ -399,6 +411,142 @@ test('the manifest pins one image tag per service and names the absent ones', ()
 test('the manifest carries the commit, so a tag can be traced to a source revision', () => {
   const parsed = parseManifest(renderManifest(MANIFEST));
   assert.equal(parsed.services[0]?.commit, '9f1c0b2a44de');
+});
+
+// -- the digest, which is the thing a tag is not (micro-org#288) --------------------------------
+
+/**
+ * The manifest names the ARTIFACT, not a pointer to one.
+ *
+ * Measured 2026-08-09: `ghcr.io/cloudsforge-online/micro-network-site:2.5.5` resolves to the image
+ * built from `5aa61e4`, a merge that landed after 2.5.5 was cut, because six repositories cut
+ * `release/2.5.6` and never merged it — leaving `main` on 2.5.5, so every later merge republished
+ * the tag `releases/2.5.5.yaml` pins. Merging a release branch republishes the tag as well, from
+ * the merge commit rather than the pinned one. Neither is visible to a check that asks whether an
+ * image EXISTS, and existence was the only question `--verify` used to ask.
+ */
+test('the manifest records the digest a tag resolved to, and the digest survives the round trip', () => {
+  const text = renderManifest(MANIFEST);
+  assert.match(text, new RegExp(`tag: "1\\.4\\.2"\\n {4}commit: "9f1c0b2a44de"\\n {4}digest: "${LEDGER_DIGEST}"`));
+  assert.equal(parseManifest(text).services[0]?.digest, LEDGER_DIGEST);
+  assert.equal(parseManifest(text).services[1]?.digest, HUB_WEB_DIGEST);
+});
+
+/**
+ * THE EIGHTEEN FILES THAT PREDATE THIS FIELD MUST STILL PARSE.
+ *
+ * Rollback is checking out the previous manifest, so those files are not history — they are the
+ * rollback path. A parser that rejected them, or a renderer that wrote `digest: ""` into a shape
+ * micro-deploy's `scripts/release-render.py` mirrors, would take that path away to fix a defect
+ * about the path being untrustworthy.
+ */
+test('a manifest with no digests parses, round trips, and is reported as unverifiable rather than rejected', () => {
+  const withoutDigests: ReleaseManifest = {
+    ...MANIFEST,
+    services: MANIFEST.services.map((service) => ({ ...service, digest: '' })),
+  };
+  const text = renderManifest(withoutDigests);
+  assert.ok(!text.includes('digest:'), 'an unknown digest is an omitted line, not an empty value');
+  assert.deepEqual(parseManifest(text), withoutDigests);
+  assert.equal(digestVerdict('', { digest: LEDGER_DIGEST }), 'unrecorded');
+});
+
+test('every manifest already in releases/ parses, and none of the old ones claims a digest', () => {
+  // Against the real files rather than a fixture of them. The eight releases named in micro-org#288
+  // and the ten 2026.08.* files are what a rollback actually reads, and a compatibility claim
+  // tested against a copy is a claim about the copy.
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'releases');
+  const files = readdirSync(dir).filter((file) => file.endsWith('.yaml'));
+  assert.ok(files.length >= 18, `only ${files.length} manifests found; this test is meant to read them all`);
+  for (const file of files) {
+    const parsed = parseManifest(readFileSync(path.join(dir, file), 'utf8'));
+    assert.ok(parsed.version !== '', `${file} parsed to no version`);
+    assert.ok(parsed.services.length > 0, `${file} parsed to no services`);
+    for (const service of parsed.services) {
+      assert.ok(service.name !== '' && service.image !== '' && service.tag !== '', `${file}: ${service.name} lost a field`);
+      assert.equal(service.digest, '', `${file} was generated before digests existed`);
+      assert.equal(digestVerdict(service.digest, {}), 'unrecorded');
+    }
+  }
+});
+
+test('a tag that has moved is a failure, and one that has not is the only state called verified', () => {
+  // The four verdicts, and the reason none of them is a boolean. `moved` is #288 happening;
+  // `unreadable` is a recorded digest GHCR would not confirm, which is not the same as agreement
+  // and must not be reported as it — "verification that cannot run is not verification".
+  assert.equal(digestVerdict(LEDGER_DIGEST, { digest: LEDGER_DIGEST }), 'verified');
+  assert.equal(digestVerdict(LEDGER_DIGEST, { digest: HUB_WEB_DIGEST }), 'moved');
+  assert.equal(digestVerdict(LEDGER_DIGEST, { reason: 'GHCR did not answer the manifest request' }), 'unreadable');
+  assert.equal(digestVerdict(LEDGER_DIGEST, {}), 'unreadable');
+  assert.equal(digestVerdict('', {}), 'unrecorded');
+});
+
+test("GHCR's answer to 'what does this tag resolve to' is read out of the header it comes in", () => {
+  // A REAL RESPONSE, captured from ghcr.io on 2026-08-09 for micro-identity:2.5.7. HTTP/2 header
+  // names arrive lower-cased and the lines are CRLF-terminated, which is why the match is
+  // case-insensitive and strips the carriage return rather than leaving it in the digest.
+  const real =
+    'HTTP/2 200 \r\n' +
+    'content-type: application/vnd.oci.image.index.v1+json\r\n' +
+    `docker-content-digest: ${LEDGER_DIGEST}\r\n` +
+    'content-length: 856\r\n\r\n';
+  assert.equal(readContentDigest(real), LEDGER_DIGEST);
+  assert.equal(readContentDigest(real.replace('docker-content-digest', 'Docker-Content-Digest')), LEDGER_DIGEST);
+
+  // A tag that does not exist carries no such header, and neither does a proxy's error page. Both
+  // must read as "could not tell": handing back a value here is how a later run reports a tag as
+  // moved when all that moved was the network.
+  assert.equal(readContentDigest('HTTP/2 404 \r\ncontent-type: application/json\r\n\r\n'), undefined);
+  assert.equal(readContentDigest('<html>502 Bad Gateway</html>'), undefined);
+  // A truncated or otherwise malformed value is not a digest, and must not be treated as one.
+  assert.equal(readContentDigest('docker-content-digest: sha256:d82f87dc\r\n'), undefined);
+  assert.equal(readContentDigest('docker-content-digest: md5:abc\r\n'), undefined);
+});
+
+/**
+ * THE NEW FIELD IS ADDITIVE, AND THE CONSUMER THAT PROVES IT IS IN ANOTHER REPOSITORY.
+ *
+ * `micro-deploy/scripts/release-render.py` parses these manifests and deliberately mirrors
+ * `parseManifest` — "a manifest that is not exactly this shape was not generated by cfctl and
+ * should not be deployed". Its parser starts an entry on `^  - ` and reads `key: value` off every
+ * other line, splitting on the FIRST colon and stripping quotes; a key it does not know lands in
+ * its dict and is never read. So a four-space `digest: "sha256:…"` line is invisible to it, and a
+ * digest's own internal colon does not become part of the key.
+ *
+ * That repository cannot be imported from here and is not checked out in this repository's CI, so
+ * the shape is asserted rather than the consumer. Checked for real on 2026-08-09: rendering a
+ * 47-service manifest with digests through `release-render.py` produced output byte-identical to
+ * the same render of `releases/2.5.7.yaml`, which has none.
+ */
+test('every line a manifest renders is a shape the python consumer in micro-deploy also parses', () => {
+  for (const line of renderManifest(MANIFEST).split('\n')) {
+    if (line === '' || line.startsWith('#')) continue;
+    const entry = /^ {2}- (\S+): ?(.*)$/.exec(line);
+    const field = /^ {4}(\S+): ?(.*)$/.exec(line);
+    const top = /^(\S+): ?(.*)$/.exec(line);
+    const item = /^ {2}- (\S+)$/.exec(line);
+    assert.ok(entry ?? field ?? top ?? item, `no parser reads this line: ${JSON.stringify(line)}`);
+    // The first colon separates key from value in both parsers, so a value containing a colon —
+    // which every digest does — must never be reachable as a key.
+    const key = (entry ?? field ?? top)?.[1];
+    if (key) assert.ok(!key.includes(':'), `${key} would be split by the consumer's partition(':')`);
+  }
+  // And the digest line specifically, at the indent a field is read at rather than the indent an
+  // entry starts at: two spaces would begin a new service and lose everything after it.
+  assert.match(renderManifest(MANIFEST), /\n {4}digest: "sha256:[0-9a-f]{64}"\n/);
+});
+
+test('only a GHCR reference yields a package path to ask about', () => {
+  assert.equal(ghcrPath('ghcr.io/cloudsforge-online/micro-ledger'), 'cloudsforge-online/micro-ledger');
+  // Anything else is answered with "this only knows how to ask GHCR" rather than a guess, because
+  // a registry that is not GHCR does not take the token dance this asks it to.
+  assert.equal(ghcrPath('docker.io/library/postgres'), undefined);
+  assert.equal(ghcrPath('ghcr.io/cloudsforge-online'), undefined);
+  assert.equal(ghcrPath('ghcr.io/cloudsforge-online/micro-ledger/extra'), undefined);
+  // A reference that already carries a tag or a digest is not a package path: the tag is a
+  // separate argument, and pasting one in here would ask GHCR for `micro-ledger:2.5.7:2.5.7`.
+  assert.equal(ghcrPath('ghcr.io/cloudsforge-online/micro-ledger:2.5.7'), undefined);
+  assert.equal(ghcrPath(`ghcr.io/cloudsforge-online/micro-ledger@${LEDGER_DIGEST}`), undefined);
 });
 
 // -- resolving where the checkouts are -----------------------------------------------------------
