@@ -52,19 +52,30 @@ test('the registry holds every repository in the organisation, and every directo
   // The repository is archived rather than deleted and its images stay published, so this is not a
   // claim that it never existed — `org/releases/2026.08.1.yaml` and `2026.08.2.yaml` still name
   // it, correctly, because those are records of releases that happened.
-  assert.equal(REGISTRY.length, 71);
+  //
+  // 73 since 2026-08-09: `pool` and `pool-web`, the Stratum v1 mining pool of
+  // 36-multi-chain-and-mining-pool.md §5 and its console. This is the direction that is supposed
+  // to be cheap and this time it was — both are APPENDED, so `DERIVED_PORT_ORDER` below gained
+  // two entries and moved none, which is the whole argument that block makes.
+  //
+  // Registering them BEFORE they are deployed is the point rather than an accident of ordering.
+  // `lantern-web` and `beacon-web` were built, served and 502ing for months while this file did
+  // not name them, and nothing could report the gap: `cfctl release --verify` checks images for
+  // the repositories the registry lists, so a surface it does not know about cannot be reported
+  // missing. A row that exists before the deploy makes the missing image the loud case.
+  assert.equal(REGISTRY.length, 73);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
-  assert.equal(counts.get('service'), 26, '22 from 03 §1.1, plus emberkin, foresight, aetherholm and tessera');
-  assert.equal(counts.get('web'), 17, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), and the two operator consoles');
+  assert.equal(counts.get('service'), 27, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera and the mining pool');
+  assert.equal(counts.get('web'), 18, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles and the pool console');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 4, '4 library repositories');
   assert.equal(counts.get('assets'), 4, 'brand and the three per-title asset repositories');
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 60);
-  assert.equal(deployableRepos().length, 46, 'services, frontends and operations services');
+  assert.equal(managedRepos().length, 62);
+  assert.equal(deployableRepos().length, 48, 'services, frontends and operations services');
 });
 
 test('names are unique — a duplicate would make one entry unreachable', () => {
@@ -201,6 +212,12 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   'lantern', 'beacon', 'faucet',
   // 4144-4145 — the two operator consoles, appended (registry.ts, after the derived block).
   'lantern-web', 'beacon-web',
+  // 4146-4147 — the mining pool and its console, appended for the same reason on 2026-08-09.
+  // Filed with their kinds instead, `pool` would have landed at index 26 and `pool-web` at 44, and
+  // every name below each of them would derive one lower — `lantern` 4142 and `beacon` 4143 among
+  // them, both already pinned in micro-deploy's compose. Appended, this list grows and does not
+  // shift, which is the only kind of registry edit that costs nothing.
+  'pool', 'pool-web',
 ];
 
 /**
