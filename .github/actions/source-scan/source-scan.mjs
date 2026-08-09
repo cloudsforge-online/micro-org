@@ -465,7 +465,32 @@ export function scan(request) {
  * @param {Record<string, string | undefined>} env
  */
 function input(name, env) {
-  return (env[`INPUT_${name.toUpperCase().replace(/-/g, '_')}`] ?? '').trim();
+  /*
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **THE HYPHEN IS KEPT, AND KEEPING IT IS THE WHOLE FUNCTION.**
+   *
+   * GitHub sets a node action's inputs as `INPUT_<NAME>` where <NAME> is the declared name
+   * upper-cased with SPACES replaced by underscores — hyphens are left alone. `@actions/core`'s
+   * `getInput` is one line and does exactly that. So `allow-match` arrives as `INPUT_ALLOW-MATCH`.
+   *
+   * This read `INPUT_ALLOW_MATCH`, and therefore read nothing. Every hyphenated input was silently
+   * absent: `allow-match`, `allow-line`, `exclude-files`, `include-files`, `empty-scan`,
+   * `missing-path`, `working-directory`, `ignore-strings`. The two guards that depend on an
+   * allow-list — "one database, and only its own" and "only published contract and runtime
+   * packages" — reported every service reading its OWN `*_DATABASE_URL` and every import of
+   * `@cloudsforge/telemetry` as violations, and `exclude-files` stopped hiding test files, so
+   * `src/env.test.ts` was scanned too. Measured on micro-settlement and micro-wallet minutes after
+   * this action first went live.
+   *
+   * The underscore form is still accepted as a FALLBACK, and only as one. Nothing GitHub does
+   * produces it; a local harness or `act` might, and refusing it would buy nothing. The dash form
+   * is tried first so that the two can never disagree about which wins.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  const upper = name.toUpperCase();
+  const asGitHubSetsIt = env[`INPUT_${upper}`];
+  const underscored = env[`INPUT_${upper.replace(/-/g, '_')}`];
+  return (asGitHubSetsIt ?? underscored ?? '').trim();
 }
 
 /**
