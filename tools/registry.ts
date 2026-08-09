@@ -16,9 +16,16 @@
 // 61 directories, so seventeen repositories were invisible to `cfctl list`, `clone`, `pull`,
 // `doctor` and `release` at once. One of them was `micro-emberkin`, which is one of the three
 // repositories the ledger account-type defect was actually found in; `estate-ci.yml`'s header
-// names this file as the reason it derives its repository list from the GitHub API instead. All 70
-// are here now — 59 managed, 11 kept — and `cfctl doctor` FAILS on a directory beside the estate
+// names this file as the reason it derives its repository list from the GitHub API instead. All 73
+// are here now — 62 managed, 11 kept — and `cfctl doctor` FAILS on a directory beside the estate
 // that no row names, so the omission cannot happen quietly a third time.
+//
+// That count is maintained by hand and it had already drifted once: it read "70 … 59 managed" on
+// 2026-08-09 while the file held 71 rows and 60 managed ones, because the two operator consoles
+// were appended below and this paragraph was not touched. `test/cfctl.test.ts` asserts the real
+// numbers, so the drift was in the prose and nowhere else — but a paragraph whose whole argument
+// is "one list, and it is complete" cannot be allowed to miscount the list. Corrected here in the
+// same change that adds `pool` and `pool-web`, which took it from 71 to 73.
 //
 // `.github` is the one organisation repository with no row, and its omission is argued rather than
 // merely true: see the org-infrastructure block below.
@@ -348,6 +355,30 @@ export const REGISTRY: readonly Repo[] = [
   // Both are `adminOnly` in `ui/packages/ui/src/surfaces.ts`; both now render the shared footer.
   web('lantern-web', 'P3', 'Lantern console: log triage, fingerprints, browser errors and RUM. Operator-only'),
   web('beacon-web', 'P3', 'Beacon console: journeys, incidents, SLOs and the release gate. Operator-only'),
+
+  // -- the mining pool and its console, created by 36-multi-chain-and-mining-pool.md ------------
+  //
+  // APPENDED for the reason the block above states and this one will not restate: ports derive
+  // from position in `deployableRepos()`. `pool` is a `service()` and `pool-web` is a `web()`, and
+  // filed with their kinds they would have sat at indices 26 and 44, moving every derived port
+  // below them — including `lantern` 4142 and `beacon` 4143, which micro-deploy's compose has
+  // already written down. They derive 4146 and 4147 here instead, and nothing moves.
+  //
+  // `phase: '36'` follows the convention `RepoBase.phase` documents for the repositories 03 §1
+  // does not enumerate: the ecosystem document that CREATES it, as `19`, `20` and `23` already do.
+  //
+  // Why `service` and not `ops`: the same test `machinery()` states. `ops` here means an operations
+  // service the estate runs FOR ITSELF — lantern, beacon, faucet. A mining pool is a product
+  // surface that miners outside the estate connect to over raw TCP, it has its own Postgres schema
+  // and migrations, and it ships a Dockerfile and calls `service-ci.yml` exactly as the other
+  // twenty-six do. `service` is what it already behaves as rather than what this file decided.
+  //
+  // One thing this row does NOT claim: that the pool pays anybody. micro-pool records a PPLNS debt
+  // and stops — `src/payouts.ts` is a typed seam that throws, and there is deliberately no payouts
+  // table. `owns` says "accounting" and not "payouts" for that reason, because `cfctl list` prints
+  // this string and it is the shortest description of the service most readers will ever see.
+  service('pool', '36', 'Stratum v1 mining pool: getblocktemplate, vardiff, share validation, block submission, PPLNS accounting'),
+  web('pool-web', '36', 'Pool console: connection details, hashrate and share charts, worker list, blocks found, per-miner earnings'),
 
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
   // These are in the list so that their absence from every cfctl operation is a stated decision
