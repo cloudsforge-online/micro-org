@@ -172,11 +172,20 @@ jobs:
     #   3. `sha-<sha>` is derived from the commit, so it is unique by construction and is the tag
     #      a one-off deploy of a branch build should pin.
     #
+    # `fix/*` is admitted on the `feat/*` argument verbatim, because it IS the `feat/*` argument —
+    # the two names differ in what prompted the work and in nothing that reaches this file. If
+    # anything the case is stronger: a fix is the change most likely to need proving against a
+    # live estate before it merges, because it is the one written in response to something that
+    # already broke, and the thing it broke is usually reproducible only there. Leaving the
+    # pattern out did not make anything safer — it made the way round it be to name a fix branch
+    # `feat/`, which costs the honesty of the branch name and buys nothing.
+    #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
-      startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/'))
+      startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/') ||
+      startsWith(github.ref, 'refs/heads/fix/'))
 
     permissions:
       contents: read
