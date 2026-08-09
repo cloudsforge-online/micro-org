@@ -97,7 +97,7 @@ composed system. AD-02 and AD-03 are the machinery that pays that cost, and
 | --- | --- |
 | [`.github/workflows/`](.github/workflows/) | The five reusable workflows every repository calls. See [`workflows/README.md`](workflows/README.md) for why they live there and not in `workflows/`. |
 | [`tools/compat.ts`](tools/compat.ts) | The contract compatibility checker. Fails on a removed field, a narrowed type or a renamed key; additive change passes. |
-| [`tools/cfctl.ts`](tools/cfctl.ts) | `list`, `clone`, `pull`, `doctor`, `release`, `new`. Replaces `scripts/clone-all.sh` and `scripts/pull-all.sh`. |
+| [`tools/cfctl.ts`](tools/cfctl.ts) | `list`, `clone`, `pull`, `doctor`, `cross`, `release`, `new`. Replaces `scripts/clone-all.sh` and `scripts/pull-all.sh`. |
 | [`tools/registry.ts`](tools/registry.ts) | The repository list. One copy. Two copies is one copy that is wrong. |
 | [`releases/`](releases/) | Release manifests, and why a manifest replaces `CLOUDSFORGE_TAG`. |
 | [`templates/`](templates/) | What `cfctl new service` and `cfctl new web` instantiate. |
@@ -108,6 +108,18 @@ pnpm install && pnpm check
 node --import tsx tools/cfctl.ts list
 node --import tsx tools/cfctl.ts doctor
 ```
+
+**Before you merge something other repositories read**, ask who breaks:
+
+```bash
+node --import tsx tools/cfctl.ts cross --repo wallet
+```
+
+Several tests in this estate open a sibling checkout and assert the two repositories agree, and
+nothing runs them when the sibling moves — so a correct upstream merge turns a downstream `main`
+red without anyone touching it, and it is discovered by whatever unrelated PR opens next (micro-org#304).
+`cfctl cross` finds those checks by reading what the files actually do, and runs them. `--list`
+shows the edges without running anything.
 
 ## The three measured mitigations
 

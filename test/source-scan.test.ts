@@ -321,11 +321,19 @@ function tree(name: string, files: Record<string, string>): string {
   return root
 }
 
-/** The action, run exactly as GitHub runs it: inputs in the environment, output on stdout. */
+/**
+ * The action, run exactly as GitHub runs it: inputs in the environment, output on stdout.
+ *
+ * **`INPUT_ALLOW-MATCH`, NOT `INPUT_ALLOW_MATCH`.** This helper used to replace the hyphen, which
+ * is not what GitHub does — it upper-cases and replaces SPACES only — and the production code had
+ * the same replacement, so eight hundred lines of tests agreed with the runtime about an encoding
+ * neither of them would ever meet. Every hyphenated input was dead in CI and green here. If this
+ * line is ever "tidied" back, `every hyphenated input in action.yml is readable` below fails.
+ */
 function act(root: string, inputs: Record<string, string>): { code: number; out: string } {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries({ 'working-directory': root, ...inputs })) {
-    env[`INPUT_${key.toUpperCase().replace(/-/g, '_')}`] = value
+    env[`INPUT_${key.toUpperCase()}`] = value
   }
   let out = ''
   const code = run(env, (s) => {
@@ -800,4 +808,70 @@ test('the two converted workflows no longer grep source themselves', () => {
   )
   // And the half-fix that seven repairs used must not come back.
   assert.doesNotMatch(service, /grep -vE ':\[0-9\]\+:/, 'the line-prefix comment filter is gone')
+})
+
+/* ================================================ the encoding GitHub actually uses == */
+
+/**
+ * **Every hyphenated input in action.yml is readable when the environment is spelled the way
+ * GitHub spells it.**
+ *
+ * This test exists because the bug it pins was invisible to eight hundred lines of tests: the
+ * runtime read `INPUT_ALLOW_MATCH` and the test harness WROTE `INPUT_ALLOW_MATCH`, so they agreed
+ * with each other about an encoding GitHub never produces. `@actions/core`'s `getInput` upper-cases
+ * the declared name and replaces SPACES with underscores; a hyphen survives. Nine of this action's
+ * fifteen inputs are hyphenated, and all nine were dead the moment it went live — `allow-match`
+ * first, which made "one database, and only its own" report micro-settlement reading
+ * `SETTLEMENT_DATABASE_URL` as another service's database.
+ *
+ * It is driven off `action.yml` rather than a list written here, so an input added tomorrow is
+ * covered by having been declared. That is the property the list would not have.
+ */
+test('every hyphenated input in action.yml is readable the way GitHub sets it', () => {
+  const yaml = readFileSync(
+    fileURLToPath(new URL('../.github/actions/source-scan/action.yml', import.meta.url)),
+    'utf8',
+  )
+  // The `inputs:` block only — `runs:` follows it and has no two-space keys.
+  const block = yaml.slice(yaml.indexOf('\ninputs:'), yaml.indexOf('\nruns:'))
+  const declared = [...block.matchAll(/^ {2}([a-z][a-z0-9-]*):$/gm)].map((m) => m[1] as string)
+  assert.ok(declared.length >= 10, `expected the full input list, parsed ${declared.length}`)
+  const hyphenated = declared.filter((n) => n.includes('-'))
+  assert.ok(hyphenated.length > 0, 'action.yml has no hyphenated input — has it been renamed?')
+
+  // `allow-match` is the one with observable behaviour, so it is asserted end to end rather than
+  // by reading the environment back: a fixture that WOULD fail, exempted by an allow-list, must
+  // pass. If the hyphen handling regresses, the exemption is not seen and this goes red.
+  const root = tree('hyphen-inputs', {
+    'src/env.ts': "const url = process.env['SETTLEMENT_DATABASE_URL']\n",
+  })
+  const env: Record<string, string> = {
+    'INPUT_WORKING-DIRECTORY': root,
+    INPUT_PATTERN: '\\b[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)\\b',
+    'INPUT_ALLOW-MATCH': '^SETTLEMENT_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$',
+    INPUT_OK: 'ok: reads its own',
+  }
+  let out = ''
+  const code = run(env, (s) => {
+    out += s
+  })
+  assert.equal(code, 0, `allow-match was not read; the action said:\n${out}`)
+  assert.match(out, /ok: reads its own/)
+
+  // And the same run with the exemption removed must FAIL, or the assertion above proves nothing
+  // about the allow-list and only that the pattern matched nothing (micro-org#38).
+  delete env['INPUT_ALLOW-MATCH']
+  let unexempt = ''
+  assert.equal(
+    run(env, (s) => {
+      unexempt += s
+    }),
+    1,
+    'without allow-match this fixture must be a hit, or the test is vacuous',
+  )
+  assert.match(unexempt, /SETTLEMENT_DATABASE_URL/)
+
+  // `working-directory` is hyphenated too and was read above — had it been dead, the scan would
+  // have run against the repository root and this file's own text would be the fixture.
+  assert.doesNotMatch(out, /source-scan\.test/)
 })
