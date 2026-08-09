@@ -330,6 +330,22 @@ test('every deployable resolves to a GHCR image under the org', () => {
   }
 });
 
+test('service-ci.yml enforces exactly the allowlist registry.ts holds', () => {
+  // registry.ts says the list is kept there "so service-ci.yml and cfctl doctor cannot disagree
+  // about it", and until this test that sentence was a hope. They disagreed for four days over
+  // @cloudsforge/secrets: CI allowed it, doctor did not, and doctor reported 36 false FAILs — one
+  // per manifest that imported the package the estate had just extracted.
+  //
+  // Parsed rather than duplicated. A second hand-written copy in this file would be a third place
+  // to forget, which is the defect, not the fix.
+  const orgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const workflow = readFileSync(path.join(orgRoot, '.github/workflows/service-ci.yml'), 'utf8');
+  const alternation = workflow.match(/^\s*allowed='([^']+)'/m)?.[1];
+  assert.ok(alternation, "service-ci.yml no longer declares allowed='…' — re-point this test, do not delete it");
+  const inCi = alternation.split('|').map((name) => `@cloudsforge/${name}`);
+  assert.deepEqual([...inCi].sort(), [...ALLOWED_SCOPED_PACKAGES].sort());
+});
+
 test('the allowed scope list contains no service names', () => {
   // Rule 2 of 03 §2. A package called @cloudsforge/ledger would be a cross-service source import
   // that had learned to look like a dependency.

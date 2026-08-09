@@ -462,6 +462,17 @@ export function imageFor(repo: ManagedRepo): string {
 // The packages a repository is allowed to import from the @cloudsforge scope. Anything else in
 // that scope is a cross-service source import wearing a package name, which rule 2 of 03 §2
 // forbids. Kept here so service-ci.yml and cfctl doctor cannot disagree about it.
+//
+// They disagreed anyway, for four days. `@cloudsforge/secrets` was extracted into
+// runtime/packages on 2026-08-05 and added to the `allowed=` list in service-ci.yml, and not
+// here — so CI passed every service that imported it while `cfctl doctor` failed all of them:
+// 36 failures on 2026-08-09, one per manifest, every one of them wrong. A stale allowlist does
+// not fail loudly, it fails *usefully-looking*, and 36 identical FAIL lines are indistinguishable
+// from a real rule at a glance, which is how they survived a release.
+//
+// The claim "kept here so they cannot disagree" is now checked rather than asserted:
+// test/cfctl.test.ts parses the `allowed=` alternation out of service-ci.yml and requires it to
+// be this list, so the next package to be extracted cannot be added to one copy alone.
 export const ALLOWED_SCOPED_PACKAGES: readonly string[] = [
   '@cloudsforge/contracts-auth',
   '@cloudsforge/contracts-money',
@@ -477,6 +488,7 @@ export const ALLOWED_SCOPED_PACKAGES: readonly string[] = [
   '@cloudsforge/auth',
   '@cloudsforge/db',
   '@cloudsforge/lifecycle',
+  '@cloudsforge/secrets',
   '@cloudsforge/policy-client',
   '@cloudsforge/ui',
   '@cloudsforge/ui-charts',
