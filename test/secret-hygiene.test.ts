@@ -158,8 +158,14 @@ test('the fixed bootstrap file passes on its own, quoted defect and refusal cons
 /* --------------------------------- every shape it refuses ------------------------------------ */
 
 /**
- * One entry per shape, in the order the checker emits them. This list is long on purpose: a
- * regression that drops a shape names the shape, rather than reporting "22 findings, expected 23".
+ * One entry per shape. This list is long on purpose: a regression that drops a shape names the
+ * shape, rather than reporting "22 findings, expected 23".
+ *
+ * It is compared as a SET, not a sequence. The step walks files in `find` order, which is
+ * directory order, which is a property of the filesystem and not of the check — this suite passed
+ * on macOS and failed on ubuntu-latest with the same twenty-three findings in a different order.
+ * Asserting an order the check never promised would make the fixture a test of APFS. Within one
+ * file the order is still line order, and the tests below that grade a single file rely on it.
  */
 const EXPECTED_POSITIVES = [
   // an allow marker with no reason is itself a finding, AND the line beneath it is still reported
@@ -196,7 +202,7 @@ const EXPECTED_POSITIVES = [
 test('every shape the estate actually published is refused, and named by shape', () => {
   const { status, out } = runCheck(join(FIXTURES, 'positives'))
   assert.equal(status, 1)
-  assert.deepEqual(shapes(out), EXPECTED_POSITIVES)
+  assert.deepEqual(shapes(out).sort(), [...EXPECTED_POSITIVES].sort())
 })
 
 test('a finding is reported at the line the credential is on, not at the line above it', () => {
