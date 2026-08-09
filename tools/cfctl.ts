@@ -4,6 +4,8 @@
 //   cfctl clone                    clone or fast-forward every micro-* repository
 //   cfctl pull                     fast-forward the checkouts that already exist
 //   cfctl doctor                   the checks for the things that actually break
+//   cfctl cross [--repo <name>]    run the checks that read a sibling repository — 'who breaks
+//                                  if I merge here', asked before the merge instead of after
 //   cfctl bump <version>           move every deployable to one version on a release/<v> branch
 //   cfctl release <version>        generate releases/<version>.yaml, one image per service
 //   cfctl release --verify <v>     check every image exists and is still the image that was pinned
@@ -42,6 +44,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { blankComments } from '../.github/actions/source-scan/source-scan.mjs';
 import {
   ALLOWED_SCOPED_PACKAGES,
   ORG,
@@ -99,8 +102,13 @@ interface Run {
   readonly err: string;
 }
 
-function run(command: string, args: readonly string[], cwd?: string): Run {
-  const result = spawnSync(command, [...args], { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+function run(command: string, args: readonly string[], cwd?: string, env?: NodeJS.ProcessEnv): Run {
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
   return {
     ok: result.status === 0,
     out: (result.stdout ?? '').trim(),
@@ -946,6 +954,345 @@ function cmdDoctor(args: Args): number {
 }
 
 // ---------------------------------------------------------------------------------------------
+// cross — the checks that read a sibling repository, run when you ask
+// ---------------------------------------------------------------------------------------------
+//
+// This estate has a family of tests that open a sibling checkout, read its source and assert the
+// two repositories agree. They are good checks and they are deliberately written to FAIL rather
+// than skip when the sibling is absent. Nothing runs them when the sibling MOVES.
+//
+// Measured 2026-08-09 (micro-org#304): three repositories went red on `main` without anyone
+// touching them, each within about an hour of the upstream merge that caused it, and none of the
+// three was noticed by that merge. Two were discovered by a release PR whose entire content is a
+// version-string bump — so the release cut is currently acting as the estate's cross-repository
+// integration test, which is the worst available place to catch this: the failure arrives
+// attached to the one diff guaranteed to be innocent, at the moment most work is blocked behind
+// it.
+//
+// WHY A COMMAND AND NOT A `doctor` CHECK. Doctor is static, offline and finishes in seconds, and
+// things that finish in seconds get run. Executing a dozen test suites is not that, and folding
+// it in would make the fast check slow enough to stop being run at all. Doctor answers "is this
+// estate wired up"; this answers "does it still agree with itself".
+//
+// WHY THE EDGES ARE DERIVED AND NOT WRITTEN DOWN. The tempting fix for #304 is a matrix listing
+// upstream → downstream. Measured 2026-08-09: four files in the estate carry an explicit
+// `repo: 'micro-*'` table, 71 test files mention a sibling checkout and 30 read one. A matrix
+// built from the four would cover a twentieth of the real surface WHILE LOOKING COMPLETE, which
+// is the same failure as the release cut — a green tick that means nothing was asked. So the
+// edges are read back out of the files, every run, and a file that mentions a sibling without
+// binding an estate root is reported as `unclassified` rather than silently dropped: a discovery
+// gap is a thing to see, not a thing to be absent.
+//
+// WHY THE REGISTRY SUPPLIES THE VOCABULARY. The sibling directory names come from `REGISTRY`
+// rather than a second list, and `diagnose` already FAILS on a directory beside the estate that
+// no registry row names. So the vocabulary is complete by construction: a repository this
+// function could not name is a repository doctor is already shouting about.
+//
+// WHAT THIS DELIBERATELY DOES NOT DO: run on the upstream merge. That needs a `repository_dispatch`
+// sender in each upstream repository and a receiver in each downstream one, and measured
+// 2026-08-10 there is not one of either anywhere — `repository_dispatch` appears in zero of the
+// 69 repositories with CI. Those workflow files live in the service repositories, not in this one.
+
+// WHY THIS READS THROUGH THE COMMENT BLANKER. The first run of this sweep, 2026-08-10, claimed
+// eleven edges out of `notify/src/catalogue.test.ts` and flagged sixty service test files as
+// candidates. One of the eleven was real; the rest were CITATIONS IN PROSE — `worlds/src/rewards.ts`
+// written in a docblock explaining why a template says what it says. A path in a comment is a
+// thing a human is being told, not a file the test opens, and treating the two alike is exactly
+// micro-org#303 in a different tool. So the same stripper those CI guards now use runs here first,
+// and what is left is what the file actually does.
+
+/** One file that reads outside its own repository. */
+export interface CrossRepoFile {
+  /** Repository-relative path. */
+  readonly file: string;
+  /** True when this file is itself a test the runner can be pointed at, rather than a helper. */
+  readonly runnable: boolean;
+  /** The sibling directory names it reads, registry names, sorted. */
+  readonly reads: readonly string[];
+}
+
+export interface CrossRepoScan {
+  readonly repo: string;
+  readonly files: readonly CrossRepoFile[];
+  /**
+   * Files that reach for a sibling by NAME and bind no estate root, so this scan will not claim
+   * them. Printed, because the alternative to an over-report is an under-report nobody sees.
+   */
+  readonly unclassified: readonly string[];
+}
+
+/**
+ * Does this file resolve a path at or above the estate root?
+ *
+ * The estate is the parent of every repository, so from `test/x.test.ts` it is `../..` and from
+ * `test/journeys/scenario.ts` it is `../../..`. The count is derived from the file's own depth
+ * rather than matched against a fixed string, because both depths are in use today and a check
+ * that only knew one would quietly classify the other as "reads nothing".
+ */
+export function bindsEstateRoot(source: string, relativeFile: string): boolean {
+  const wanted = relativeFile.split('/').length;
+  for (const match of source.matchAll(/new URL\(\s*['"`]([./]+)['"`]/g)) {
+    const hops = (match[1] ?? '').split('/').filter((part) => part === '..').length;
+    if (hops >= wanted) return true;
+  }
+  return false;
+}
+
+/**
+ * The sibling directories a file reads, as registry names.
+ *
+ * Three shapes, all of them live in the estate today: interpolation against an estate root
+ * (`${ESTATE}pool/src/...`), a join (`join(ESTATE, 'tessera-assets')`), and a bare path literal
+ * whose first segment is a repository (`reads: 'wallet/src/addresses.ts'` in an edge table, where
+ * the sibling name is nowhere near the root that will be prefixed to it).
+ *
+ * The third is the loose one and it is loose on purpose. Its cost is running a suite that did not
+ * need running; the cost of tightening it is an edge that is real and unseen, which is the entire
+ * defect this exists for.
+ */
+export function siblingReads(source: string, own: string, known: ReadonlySet<string>): string[] {
+  const found = new Set<string>();
+  const add = (name: string | undefined): void => {
+    if (name && name !== own && known.has(name)) found.add(name);
+  };
+  for (const match of source.matchAll(/\$\{[A-Za-z_$][\w$]*\}([a-z0-9-]+)\//g)) add(match[1]);
+  for (const match of source.matchAll(/join\(\s*[A-Za-z_$][\w$]*\s*,\s*['"]([a-z0-9-]+)['"]/g)) add(match[1]);
+  for (const match of source.matchAll(/['"`]([a-z0-9-]+)\/[^'"`\n]*['"`]/g)) add(match[1]);
+  return [...found].sort();
+}
+
+/**
+ * A file that reaches for a sibling by name without resolving the estate — the near miss.
+ *
+ * Deliberately narrow, and narrower than `siblingReads`. The two are asymmetric on purpose: a
+ * claimed edge costs a suite run, so it can afford to be loose, whereas this list is READ BY A
+ * PERSON deciding whether the sweep has a hole, and a list of sixty entries that are all fine is
+ * a list nobody reads twice. So only the two shapes that mean somebody meant a checkout count:
+ * the repository's own name (`micro-wallet`), and a relative path climbing out of this repository
+ * into a named sibling.
+ */
+export function reachesForSibling(source: string, own: string, known: ReadonlySet<string>): boolean {
+  for (const match of source.matchAll(/micro-([a-z0-9-]+)\b/g)) {
+    const name = match[1] ?? '';
+    if (name !== own && known.has(name)) return true;
+  }
+  for (const match of source.matchAll(/(?:\.\.\/){2,}([a-z0-9-]+)\//g)) {
+    const name = match[1] ?? '';
+    if (name !== own && known.has(name)) return true;
+  }
+  return false;
+}
+
+/** A file `node --test` could be pointed at, as opposed to a helper it would only import. */
+const RUNNABLE = /\.test\.(ts|tsx|js|mjs)$/;
+
+/**
+ * Every source under `test/`, plus the `src/*.test.ts` layout the services use.
+ *
+ * JavaScript is included as well as TypeScript, even though every repository in the estate is
+ * TypeScript today. The runner is `node --test`, which runs JavaScript; a repository that is not
+ * TypeScript would otherwise be scanned as containing no tests at all, and "no tests" reads here
+ * as "no cross-repository checks" — the exact silence this command exists to remove.
+ */
+function testSources(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (relative: string): void => {
+    const absolute = path.join(dir, relative);
+    if (!existsSync(absolute)) return;
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (/\.(ts|tsx|mts|js|mjs)$/.test(entry.name)) found.push(child);
+    }
+  };
+  walk('test');
+  if (existsSync(path.join(dir, 'src'))) {
+    for (const entry of readdirSync(path.join(dir, 'src'), { withFileTypes: true })) {
+      if (entry.isFile() && RUNNABLE.test(entry.name)) found.push(`src/${entry.name}`);
+    }
+  }
+  return found.sort();
+}
+
+export function scanCrossRepo(dir: string, own: string, known: ReadonlySet<string>): CrossRepoScan {
+  const files: CrossRepoFile[] = [];
+  const unclassified: string[] = [];
+  for (const file of testSources(dir)) {
+    let source: string;
+    try {
+      source = blankComments(readFileSync(path.join(dir, file), 'utf8'), { syntax: 'js' });
+    } catch {
+      continue;
+    }
+    if (bindsEstateRoot(source, file)) {
+      const reads = siblingReads(source, own, known);
+      if (reads.length > 0) files.push({ file, runnable: RUNNABLE.test(file), reads });
+    } else if (reachesForSibling(source, own, known)) {
+      unclassified.push(file);
+    }
+  }
+  return { repo: own, files, unclassified };
+}
+
+/**
+ * The repository's own test command, pointed at specific files.
+ *
+ * Derived from `package.json` rather than assumed, because the runner is not uniform: one web
+ * repository needs `--import @cloudsforge/ui/test-loader` for its DOM shims and one service runs
+ * `--test-concurrency=1`. Running a cross-repository test without the loader its repository
+ * chose is a failure this tool caused, reported as a failure the estate has.
+ *
+ * Returns undefined for anything that is not a `node … --test …` line, and the caller then runs
+ * the whole suite and says that it did. Guessing at an unfamiliar runner is how a check ends up
+ * green because it never started.
+ */
+export function testCommandFor(script: string, files: readonly string[]): string[] | undefined {
+  const tokens = script.trim().split(/\s+/);
+  if (tokens[0] !== 'node') return undefined;
+  const at = tokens.indexOf('--test');
+  if (at === -1) return undefined;
+  const flags = tokens.slice(at + 1).filter((token) => token.startsWith('-'));
+  return [...tokens.slice(0, at + 1), ...flags, ...files];
+}
+
+/**
+ * The environment a nested `node --test` gets, with `NODE_TEST_CONTEXT` removed.
+ *
+ * NOT A TEST DETAIL — this is a false green. Node's test runner sets `NODE_TEST_CONTEXT` in the
+ * children it spawns, and a `node --test` that inherits it believes it is reporting to a parent
+ * runner instead of being one. Measured 2026-08-10: the same failing suite exits 1 without the
+ * variable and 0 with it. So a `cfctl cross` invoked from anywhere inside a test — this
+ * repository's own suite is the obvious case, and a wrapper script is the likely one — would
+ * report every downstream repository as agreeing with its upstream, no matter what it found.
+ *
+ * A sweep whose whole purpose is to go red cannot inherit a variable that stops it going red.
+ */
+function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env['NODE_TEST_CONTEXT'];
+  return env;
+}
+
+function testScript(dir: string): string | undefined {
+  const manifest = readManifest(path.join(dir, 'package.json'));
+  const scripts = (manifest as { scripts?: Record<string, string> } | undefined)?.scripts;
+  return scripts?.['test'];
+}
+
+function cmdCross(args: Args): number {
+  const known = new Set(REGISTRY.map((repo) => repo.name));
+  const only = args.option('repo');
+  if (only !== undefined && !known.has(only)) {
+    process.stdout.write(`cfctl cross: '${only}' is in no registry row\n`);
+    return 2;
+  }
+
+  const scans: CrossRepoScan[] = [];
+  for (const repo of managedRepos()) {
+    const dir = path.join(microRoot(), repo.name);
+    if (!existsSync(dir)) continue;
+    const scan = scanCrossRepo(dir, repo.name, known);
+    if (scan.files.length > 0 || scan.unclassified.length > 0) scans.push(scan);
+  }
+
+  const total = scans.reduce((sum, scan) => sum + scan.files.length, 0);
+
+  // Anti-vacuity, on micro-org#38's rule: a sweep that finds nothing has not proved the estate
+  // agrees with itself, it has proved the sweep is broken. The estate had 30 such files on
+  // 2026-08-09, so zero means the working tree is empty or the detector stopped matching.
+  if (total === 0) {
+    process.stdout.write(
+      'cfctl cross: no cross-repository check found anywhere in this working tree.\n' +
+        "  ↳ that is a broken sweep, not a clean estate — clone the repositories ('cfctl clone')\n" +
+        '    or re-point siblingReads(), which is what stopped matching.\n',
+    );
+    return 1;
+  }
+
+  const readers = scans.filter((scan) => scan.files.length > 0);
+  const wanted = readers.filter((scan) => only === undefined || scan.files.some((file) => file.reads.includes(only)));
+
+  let shown = 0;
+  for (const scan of wanted) {
+    for (const file of scan.files) {
+      if (only !== undefined && !file.reads.includes(only)) continue;
+      shown += 1;
+      process.stdout.write(`${pad(scan.repo, 18)}${pad(file.file, 40)}reads ${file.reads.join(', ')}\n`);
+    }
+  }
+  process.stdout.write(
+    only === undefined
+      ? `\n${total} cross-repository check(s) in ${readers.length} repositories\n`
+      : `\n${shown} check(s) in ${wanted.length} repositories read '${only}', of ${total} in the estate\n`,
+  );
+
+  // The near misses are a COUNT by default and a list on request. Printed in full they run to
+  // three screens of files that are all fine, and a report nobody finishes is a report that hides
+  // the one line that mattered — which is the failure mode this whole command exists to fix, at a
+  // smaller scale. The number is here so that it moving is noticeable.
+  const near = scans.reduce((sum, scan) => sum + scan.unclassified.length, 0);
+  if (near > 0 && !args.flag('unclassified')) {
+    process.stdout.write(
+      `${near} more file(s) reach for a sibling by name and bind no estate root — ` +
+        "'cfctl cross --unclassified' lists them\n",
+    );
+  } else if (near > 0) {
+    for (const scan of scans) {
+      for (const file of scan.unclassified) {
+        process.stdout.write(`${pad(scan.repo, 18)}${pad(file, 40)}names a sibling, binds no estate root\n`);
+      }
+    }
+  }
+
+  if (args.flag('list')) return 0;
+  if (only !== undefined && wanted.length === 0) {
+    process.stdout.write(`nothing in this working tree reads '${only}'\n`);
+    return 0;
+  }
+
+  let failed = 0;
+  for (const scan of wanted) {
+    const dir = path.join(microRoot(), scan.repo);
+    const script = testScript(dir);
+    if (script === undefined) {
+      process.stdout.write(`${pad('SKIP', 6)}${scan.repo}: no test script in package.json\n`);
+      failed += 1;
+      continue;
+    }
+    // With --repo, run only the checks that read THAT repository. Running the rest would attribute
+    // an unrelated failure to the merge being asked about, which is the release cut's mistake in
+    // miniature: a red tick whose cause is somewhere else.
+    const relevant = scan.files.filter((file) => only === undefined || file.reads.includes(only));
+    const runnable = relevant.filter((file) => file.runnable).map((file) => file.file);
+    const helpers = relevant.filter((file) => !file.runnable);
+    const argv = helpers.length > 0 ? undefined : testCommandFor(script, runnable);
+    const why =
+      helpers.length > 0
+        ? `whole suite: ${helpers.map((file) => file.file).join(', ')} is a helper, not a test file`
+        : argv === undefined
+          ? `whole suite: '${script}' is not a runner this tool can narrow`
+          : runnable.join(', ');
+    process.stdout.write(`\n── ${scan.repo}: ${why}\n`);
+    const result =
+      argv === undefined
+        ? run('pnpm', ['-s', 'test'], dir, childEnv())
+        : run(argv[0] ?? 'node', argv.slice(1), dir, childEnv());
+    if (result.ok) {
+      process.stdout.write(`${pad('ok', 6)}${scan.repo}\n`);
+    } else {
+      failed += 1;
+      process.stdout.write(`${pad('FAIL', 6)}${scan.repo}\n`);
+      const output = `${result.out}\n${result.err}`.trim().split('\n');
+      for (const line of output.slice(-25)) process.stdout.write(`       ${line}\n`);
+    }
+  }
+
+  process.stdout.write(`\n${failed} of ${wanted.length} repositories disagree with a sibling\n`);
+  return failed > 0 ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------------------------
 // release
 // ---------------------------------------------------------------------------------------------
 
@@ -1664,6 +2011,7 @@ const USAGE = `cfctl — CloudsForge organisation machinery (AD-03)
   cfctl clone [--only a,b] [--kind <kind>] [--dry-run]
   cfctl pull  [--only a,b] [--kind <kind>]
   cfctl doctor [--online] [--strict]
+  cfctl cross [--list] [--unclassified] [--repo <name>]
   cfctl bump <version> [--only a,b] [--notes <file>] [--any-branch] [--push]
   cfctl release <version> [--force]
   cfctl release --verify <version>
@@ -1684,6 +2032,8 @@ export function main(argv: readonly string[]): number {
       return cmdPull(args);
     case 'doctor':
       return cmdDoctor(args);
+    case 'cross':
+      return cmdCross(args);
     case 'bump':
       return cmdBump(args);
     case 'release':
