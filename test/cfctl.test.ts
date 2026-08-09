@@ -453,23 +453,64 @@ test('a manifest with no digests parses, round trips, and is reported as unverif
   assert.equal(digestVerdict('', { digest: LEDGER_DIGEST }), 'unrecorded');
 });
 
-test('every manifest already in releases/ parses, and none of the old ones claims a digest', () => {
+/**
+ * ── RE-POINTED 2026-08-09 WHEN THE FIRST DIGEST-BEARING MANIFEST WAS CUT ──────────────────────
+ *
+ * This read "none of the old ones claims a digest" and looped over every file in `releases/`, which
+ * was the same sentence while every file WAS an old one. `2.5.8.yaml` — generated 11:04Z, three
+ * hours after the field landed at 07:56Z — is the first manifest that pins all forty-eight
+ * services, and it turned the compatibility check red for doing exactly what it was built to do.
+ *
+ * The fix is not to drop the assertion. Both halves are load-bearing and they are DIFFERENT
+ * claims, so they are now split on the one thing that decides which applies: when the file was
+ * generated.
+ *
+ *   * before the field existed → every service must read back '' and verify as `unrecorded`. This
+ *     is the rollback path: those eighteen files are what `--rollback` checks out, and a parser
+ *     that rejected them would remove the estate's way back to fix a defect about the way back.
+ *   * after → every service must carry a well-formed digest. A cut that silently drops one is
+ *     micro-org#288 again, one entry at a time, and `--verify` reports the hole as `unrecorded`
+ *     rather than as a failure — so nothing else in this suite would go red for it.
+ *
+ * The pre-digest set is CLOSED: no manifest generated before 07:56Z on 2026-08-09 can ever be cut
+ * again, so its size is asserted exactly — twenty files, being 2.3.0, 2.4.0, 2.5.2 through 2.5.7
+ * and the twelve 2026.08.* files. A twenty-first dated before the cutoff is a hand-edited
+ * manifest, which is the one thing the header of every one of these files forbids.
+ */
+const DIGESTS_LANDED = Date.parse('2026-08-09T07:56:19Z'); // 16142d1, "a tag is not an artifact"
+
+test('every manifest in releases/ parses, and carries digests exactly if it was cut after they existed', () => {
   // Against the real files rather than a fixture of them. The eight releases named in micro-org#288
-  // and the ten 2026.08.* files are what a rollback actually reads, and a compatibility claim
+  // and the twelve 2026.08.* files are what a rollback actually reads, and a compatibility claim
   // tested against a copy is a claim about the copy.
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'releases');
   const files = readdirSync(dir).filter((file) => file.endsWith('.yaml'));
   assert.ok(files.length >= 18, `only ${files.length} manifests found; this test is meant to read them all`);
+  let predating = 0;
   for (const file of files) {
     const parsed = parseManifest(readFileSync(path.join(dir, file), 'utf8'));
     assert.ok(parsed.version !== '', `${file} parsed to no version`);
     assert.ok(parsed.services.length > 0, `${file} parsed to no services`);
+    const generated = Date.parse(parsed.generated);
+    assert.ok(!Number.isNaN(generated), `${file} has no readable generated timestamp`);
+    const old = generated < DIGESTS_LANDED;
+    if (old) predating += 1;
     for (const service of parsed.services) {
       assert.ok(service.name !== '' && service.image !== '' && service.tag !== '', `${file}: ${service.name} lost a field`);
-      assert.equal(service.digest, '', `${file} was generated before digests existed`);
-      assert.equal(digestVerdict(service.digest, {}), 'unrecorded');
+      if (old) {
+        assert.equal(service.digest, '', `${file} was generated before digests existed`);
+        assert.equal(digestVerdict(service.digest, {}), 'unrecorded');
+      } else {
+        assert.match(
+          service.digest,
+          /^sha256:[0-9a-f]{64}$/,
+          `${file}: ${service.name} was cut after digests existed and pins none, so a rollback to it ` +
+            'names a tag rather than an artifact',
+        );
+      }
     }
   }
+  assert.equal(predating, 20, 'the set of manifests cut before digests existed is history and cannot grow');
 });
 
 test('a tag that has moved is a failure, and one that has not is the only state called verified', () => {
