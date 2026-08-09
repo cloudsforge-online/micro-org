@@ -104,5 +104,16 @@ jobs:
             echo "Additive-only means: add a field alongside the old one and deprecate the old one in a"
             echo "comment. Removing it is a major version, and a major version of a contract package is a"
             echo "coordinated release across every consumer — which is the thing this topology cannot do."
+            echo
+            echo "If the additive form is genuinely WORSE than the break — a client demanding a field its"
+            echo "server stopped sending is a runtime failure in every caller, right now — record it in"
+            echo "compat-breaks.json beside the package.json and ship a version bump with it:"
+            echo
+            echo '  [{ "path": "Type.field", "acceptedIn": "0.3.0", "reason": "at least 40 characters" }]'
+            echo
+            echo "The entry is refused unless the version is strictly greater than the base ref's, unless"
+            echo "acceptedIn is this package's current version, and unless the path is actually breaking —"
+            echo "so it records one release rather than exempting a path for ever. The break is then"
+            echo "annotated on the PR as a notice, with its reason, because the log is the record."
             exit 1
           fi
