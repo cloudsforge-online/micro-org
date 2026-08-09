@@ -4,6 +4,7 @@
 //   cfctl clone                    clone or fast-forward every micro-* repository
 //   cfctl pull                     fast-forward the checkouts that already exist
 //   cfctl doctor                   the checks for the things that actually break
+//   cfctl bump <version>           move every deployable to one version on a release/<v> branch
 //   cfctl release <version>        generate releases/<version>.yaml, one image per service
 //   cfctl release --verify <v>     check every image exists and is still the image that was pinned
 //   cfctl new service <name>       instantiate micro-service-template
@@ -1086,6 +1087,221 @@ function releasesDir(): string {
   return path.join(ORG_ROOT, 'releases');
 }
 
+// ---------------------------------------------------------------------------------------------
+// bump — the step before `release`, which until now was done by hand forty-eight times
+// ---------------------------------------------------------------------------------------------
+//
+// `cfctl release` records what the tags resolve to. It does not CREATE them, and the thing that
+// does is a version bump in every deployable's package.json, because `publish-image.yml` tags the
+// image with `require('./package.json').version` and never moves a tag it has already published.
+// So "cut 2.5.8" means: forty-eight package.json edits, forty-eight commits, forty-eight branches,
+// forty-eight pushes — and then a manifest.
+//
+// 2.5.7 was done by hand. That is why this exists. The failure mode of doing it by hand is not
+// tedium, it is a SILENT PARTIAL: one repository missed, its image never publishes 2.5.8, and
+// `cfctl release` pins it at the version it still has. The manifest is then internally consistent
+// and wrong — it says the estate is 2.5.8 and one service is a release behind, which is exactly
+// the drift the manifest format exists to make impossible. `cfctl release`'s digest lookup would
+// not catch it either: the old tag resolves perfectly well.
+//
+// Three refusals, and each is a partial release that has already happened somewhere:
+//
+//   * a DIRTY checkout is refused, not stashed. A version bump that sweeps up somebody else's
+//     uncommitted work puts unreviewed code behind a version number, and the version number is
+//     what the estate deploys by.
+//   * a target that is not strictly AHEAD of the current version is refused. Re-cutting a version
+//     is the one thing `publish-image.yml` cannot express — the tag is already taken and will not
+//     move — so a bump that goes backwards or sideways produces a branch whose CI publishes
+//     nothing and whose green tick means "already published", not "published this".
+//   * a repository already AT the target is skipped rather than committed. Re-running after a
+//     partial failure is the normal way this command is used, and an empty commit on a release
+//     branch is a commit whose diff cannot answer what it released.
+//
+// Pushing is opt-in (`--push`). Forty-eight pushes start forty-eight image builds, and that is a
+// thing to do on purpose rather than as the default behaviour of a command that also edits files.
+
+/** Numeric compare of dotted versions. Returns <0, 0 or >0. Non-numeric segments sort as -1. */
+export function compareDotted(a: string, b: string): number {
+  const parse = (value: string): readonly number[] =>
+    value.split('.').map((part) => {
+      const n = Number.parseInt(part, 10);
+      return Number.isNaN(n) ? -1 : n;
+    });
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const difference = (left[i] ?? 0) - (right[i] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * Rewrite the top-level `"version"` of a package.json, touching nothing else.
+ *
+ * Deliberately a textual replacement rather than `JSON.parse` → `JSON.stringify`. A round trip
+ * reformats the whole file — key order, indentation, the trailing newline — and turns a one-line
+ * release diff into a whole-file one that no reviewer can read.
+ *
+ * `expected` is what `JSON.parse` says the version is, and it is passed in so the textual edit can
+ * be checked against the parsed one. Without it this is a regex looking for the first line that
+ * says `"version"`, and package.json is a format where a nested object can say that too. Requiring
+ * the two to AGREE means the only string this can rewrite is the one the tag will be cut from: if
+ * the regex found some other occurrence first, it does not match `expected` and this refuses
+ * rather than editing the wrong field and reporting success.
+ */
+export function rewriteVersionText(
+  text: string,
+  expected: string,
+  next: string,
+): { readonly ok: boolean; readonly text?: string } {
+  const match = /^(\s*"version"\s*:\s*")([^"]*)(")/m.exec(text);
+  if (!match || match[2] !== expected) return { ok: false };
+  return { ok: true, text: text.replace(match[0], `${match[1]}${next}${match[3]}`) };
+}
+
+function rewriteVersion(file: string, expected: string, next: string): boolean {
+  const rewritten = rewriteVersionText(readFileSync(file, 'utf8'), expected, next);
+  if (!rewritten.ok || rewritten.text === undefined) return false;
+  writeFileSync(file, rewritten.text);
+  return true;
+}
+
+function cmdBump(args: Args): number {
+  const version = args.positional[1];
+  if (!version) {
+    process.stderr.write('usage: cfctl bump <version> [--only a,b] [--notes <file>] [--push]\n');
+    return 2;
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    process.stderr.write(
+      `cfctl: ${version} is not a three-part numeric version. The image tag is package.json's\n` +
+        'version verbatim, and a tag the estate cannot order is a tag a rollback cannot walk back.\n',
+    );
+    return 2;
+  }
+
+  const notesFile = args.option('notes');
+  if (notesFile !== undefined && !existsSync(notesFile)) {
+    process.stderr.write(`cfctl: --notes ${notesFile} does not exist\n`);
+    return 2;
+  }
+  const notes = notesFile === undefined ? '' : readFileSync(notesFile, 'utf8').trim();
+  const branch = `release/${version}`;
+  const push = args.flag('push');
+
+  const only = args.option('only');
+  const names = only === undefined ? undefined : new Set(only.split(','));
+  const repos = deployableRepos().filter((repo) => names === undefined || names.has(repo.name));
+
+  const bumped: string[] = [];
+  const already: string[] = [];
+  const absent: string[] = [];
+  const refused: string[] = [];
+
+  for (const repo of repos) {
+    const checkout = inspect(repo);
+    if (checkout.state === 'absent' || checkout.state === 'not-a-repo') {
+      absent.push(repo.name);
+      continue;
+    }
+    if (checkout.state === 'dirty') {
+      refused.push(`${repo.name}: uncommitted changes — a version bump must not carry them`);
+      continue;
+    }
+
+    const file = path.join(checkout.dir, 'package.json');
+    const manifest = readManifest(file);
+    const current = manifest?.version;
+    if (current === undefined) {
+      refused.push(`${repo.name}: package.json has no version, so publish-image has nothing to tag`);
+      continue;
+    }
+    if (current === version) {
+      already.push(repo.name);
+      continue;
+    }
+    if (compareDotted(version, current) <= 0) {
+      refused.push(`${repo.name}: is ${current}, and ${version} does not come after it`);
+      continue;
+    }
+
+    // The branch is made from wherever the checkout is, and the checkout is expected to be `main`.
+    // Saying so out loud rather than forcing it: a release cut from a feature branch is a real
+    // thing an operator sometimes wants (a rehearsal), and a tool that silently checks out `main`
+    // would discard the branch they were standing on to get it.
+    if (checkout.branch !== 'main' && !args.flag('any-branch')) {
+      refused.push(
+        `${repo.name}: is on ${checkout.branch}, not main — pass --any-branch if that is deliberate`,
+      );
+      continue;
+    }
+
+    const exists = git(checkout.dir, ['rev-parse', '--verify', branch]).ok;
+    const switched = gitWrite(repo, checkout.dir, exists ? ['checkout', branch] : ['checkout', '-b', branch]);
+    if (!switched.ok) {
+      refused.push(`${repo.name}: could not reach ${branch} — ${switched.err}`);
+      continue;
+    }
+
+    if (!rewriteVersion(file, current, version)) {
+      refused.push(
+        `${repo.name}: package.json parses as ${current}, but the first "version" line does not say ` +
+          'that — refusing to guess which one the image tag comes from',
+      );
+      continue;
+    }
+
+    gitWrite(repo, checkout.dir, ['add', 'package.json']);
+    const message = notes === '' ? `release: ${version}` : `release: ${version}\n\n${notes}`;
+    const committed = gitWrite(repo, checkout.dir, ['commit', '-m', message]);
+    if (!committed.ok) {
+      refused.push(`${repo.name}: commit failed — ${committed.err || committed.out}`);
+      continue;
+    }
+
+    if (push) {
+      const pushed = gitWrite(repo, checkout.dir, ['push', '-u', 'origin', branch]);
+      if (!pushed.ok) {
+        refused.push(`${repo.name}: committed ${current} → ${version}, but the push failed — ${pushed.err}`);
+        continue;
+      }
+    }
+    bumped.push(`${repo.name} ${current} → ${version}`);
+  }
+
+  for (const line of bumped) process.stdout.write(`  bumped   ${line}\n`);
+  for (const name of already) process.stdout.write(`  already  ${name} is ${version}\n`);
+  for (const name of absent) process.stdout.write(`  absent   ${name}\n`);
+  for (const line of refused) process.stdout.write(`  REFUSED  ${line}\n`);
+
+  process.stdout.write(
+    `\n${bumped.length} bumped, ${already.length} already at ${version}, ${absent.length} absent, ` +
+      `${refused.length} refused, of ${repos.length} deployables\n`,
+  );
+
+  // A refusal is an ERROR rather than a note, and this is the whole point of the command. The
+  // damage a hand-run bump does is the one repository that got missed, and a summary line reporting
+  // it among forty-seven successes is a line that gets read as success.
+  if (refused.length > 0) {
+    process.stdout.write(
+      '\n::error::the estate ships ONE version across every deployable. Until the refusals above ' +
+        `are settled, ${version} is a partial release: cfctl release would pin the refused ` +
+        'repositories at the version they still have, and the manifest would be consistent and wrong.\n',
+    );
+    return 1;
+  }
+  if (!push) {
+    process.stdout.write(`\nnothing was pushed. When the branches look right:  cfctl bump ${version} --push\n`);
+    return 0;
+  }
+  process.stdout.write(
+    `\n${branch} is pushed in ${bumped.length} repositories. Each push publishes an image tagged ` +
+      `${version}.\nWhen those builds are green and the branches are merged:  cfctl release ${version}\n`,
+  );
+  return 0;
+}
+
 function cmdRelease(args: Args): number {
   const version = args.option('verify') ?? args.positional[1];
   if (!version) {
@@ -1448,6 +1664,7 @@ const USAGE = `cfctl — CloudsForge organisation machinery (AD-03)
   cfctl clone [--only a,b] [--kind <kind>] [--dry-run]
   cfctl pull  [--only a,b] [--kind <kind>]
   cfctl doctor [--online] [--strict]
+  cfctl bump <version> [--only a,b] [--notes <file>] [--any-branch] [--push]
   cfctl release <version> [--force]
   cfctl release --verify <version>
   cfctl new service <name>
@@ -1467,6 +1684,8 @@ export function main(argv: readonly string[]): number {
       return cmdPull(args);
     case 'doctor':
       return cmdDoctor(args);
+    case 'bump':
+      return cmdBump(args);
     case 'release':
       return cmdRelease(args);
     case 'new':

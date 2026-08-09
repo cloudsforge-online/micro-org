@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
+  compareDotted,
   digestVerdict,
   ghcrPath,
   inspect,
@@ -15,6 +16,7 @@ import {
   parseManifest,
   portFor,
   renderManifest,
+  rewriteVersionText,
   satisfies,
   unregisteredSiblings,
   type ReleaseManifest,
@@ -575,4 +577,66 @@ test('nothing managed resolves to a path inside repos/', () => {
   for (const repo of managedRepos()) {
     assert.ok(!inspect(repo).dir.includes(`${path.sep}repos${path.sep}`), `${repo.name} resolves into repos/`);
   }
+});
+
+/* ------------------------------- bump ---------------------------------- */
+
+// The ordering `cfctl bump` refuses on. A bump that is not strictly ahead produces a release
+// branch whose CI publishes nothing, because publish-image never moves a tag it has already
+// written — and the green tick on that run means "already published", not "published this".
+test('compareDotted orders versions numerically, not as text', () => {
+  assert.ok(compareDotted('2.5.8', '2.5.7') > 0);
+  assert.ok(compareDotted('2.5.7', '2.5.8') < 0);
+  assert.equal(compareDotted('2.5.7', '2.5.7'), 0);
+
+  // The one every string comparison gets wrong, and the reason this is not `a < b`.
+  assert.ok(compareDotted('2.10.0', '2.9.0') > 0);
+  assert.ok(compareDotted('0.10.0', '0.9.0') > 0);
+
+  // A shorter version is not a smaller one segment by segment: the missing segments are zeroes.
+  assert.equal(compareDotted('2.5', '2.5.0'), 0);
+  assert.ok(compareDotted('2.5.1', '2.5') > 0);
+});
+
+test('rewriteVersionText changes the version and nothing else about the file', () => {
+  const before = [
+    '{',
+    '  "name": "micro-custody",',
+    '  "version": "2.5.7",',
+    '  "private": true,',
+    '  "scripts": { "test": "node --test" }',
+    '}',
+    '',
+  ].join('\n');
+
+  const after = rewriteVersionText(before, '2.5.7', '2.5.8');
+  assert.ok(after.ok);
+  assert.equal(after.text, before.replace('"2.5.7"', '"2.5.8"'));
+
+  // Said explicitly because the alternative implementation — JSON.parse then JSON.stringify —
+  // passes an equality check on the parsed object while rewriting every line of the file, and a
+  // release diff nobody can read is a release nobody reviews.
+  assert.equal(after.text?.split('\n').length, before.split('\n').length);
+  assert.ok(after.text?.endsWith('}\n'));
+});
+
+test('rewriteVersionText refuses when the first "version" line is not the parsed one', () => {
+  // package.json is a format where a nested object can also say "version". If the regex reaches
+  // one of those first, the edit would land on a field the image tag does not come from, and the
+  // command would report a successful bump of the wrong string.
+  const nestedFirst = [
+    '{',
+    '  "name": "micro-thing",',
+    '  "engines": {',
+    '    "version": "0.0.1"',
+    '  },',
+    '  "version": "2.5.7"',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.equal(rewriteVersionText(nestedFirst, '2.5.7', '2.5.8').ok, false);
+
+  // And a file with no version at all is refused rather than treated as an empty one.
+  assert.equal(rewriteVersionText('{ "name": "micro-thing" }\n', '2.5.7', '2.5.8').ok, false);
 });
