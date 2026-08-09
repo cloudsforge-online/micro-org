@@ -10,10 +10,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
+  applyAcceptedBreaks,
   checkoutPackageAtRef,
   classifyRole,
+  compareVersions,
   compareSurfaces,
   entryFileOf,
+  readAcceptedBreaks,
   surfaceOfEntry,
   widensFunctionSignature,
   widensScalar,
@@ -357,4 +360,135 @@ test('well-known symbol members are not surface — their names carry an unstabl
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/* --------------------------- accepted breaks ---------------------------- */
+
+// A gate that cannot be satisfied is a gate that gets bypassed. micro-sdk#1 is the case: the
+// correct fix for a client that decoded a field its server had stopped sending was to REMOVE two
+// fields, every additive alternative was worse than the break, and there was no way to say so — so
+// the only moves left were "do not fix the bug" and "merge red", and neither leaves a record.
+//
+// So the mechanism has to make taking a break cost something. Each test below is one of those
+// costs, and the point of every one of them is that the waiver file must not become the thing this
+// checker is protecting the estate from.
+
+const removedField: Finding = {
+  kind: 'removed',
+  path: 'MintCatalogue.priceShards',
+  detail: 'field removed',
+  breaking: true,
+};
+const otherRemoved: Finding = { kind: 'removed', path: 'Token.priceShards', detail: 'field removed', breaking: true };
+const REASON = 'mint stopped sending it when SHARD was retired, so the strict decoder threw on every live call';
+
+test('with no waiver file, nothing changes — a break is still a break', () => {
+  const split = applyAcceptedBreaks([removedField], [], '0.3.0', '0.2.0');
+  assert.deepEqual(split.unwaived, [removedField]);
+  assert.deepEqual(split.waived, []);
+  assert.deepEqual(split.refusals, []);
+});
+
+test('a recorded break with a version bump is accepted, and keeps its reason for the log', () => {
+  const split = applyAcceptedBreaks(
+    [removedField, otherRemoved],
+    [
+      { path: removedField.path, acceptedIn: '0.3.0', reason: REASON },
+      { path: otherRemoved.path, acceptedIn: '0.3.0', reason: REASON },
+    ],
+    '0.3.0',
+    '0.2.0',
+  );
+  assert.deepEqual(split.unwaived, []);
+  assert.deepEqual(split.refusals, []);
+  assert.deepEqual(
+    split.waived.map((finding) => finding.path),
+    [removedField.path, otherRemoved.path],
+  );
+  // The reason travels with the finding because the run's log IS the record. A waiver that
+  // silences the finding records nothing at all.
+  assert.equal(split.waived[0]?.reason, REASON);
+});
+
+test('a break WITHOUT a version bump is refused — that is the condition that makes this honest', () => {
+  // The whole value a consumer gets from this mechanism is that a break arrives with a version it
+  // can pin away from. Without the bump, a consumer resolving the same range receives the break by
+  // surprise, which is the failure this file's header exists to describe.
+  const split = applyAcceptedBreaks([removedField], [{ path: removedField.path, acceptedIn: '0.2.0', reason: REASON }], '0.2.0', '0.2.0');
+  assert.equal(split.refusals.length, 1);
+  assert.match(split.refusals[0]!, /not greater than the base ref's 0\.2\.0/);
+});
+
+test('a waiver expires when the version moves on, rather than exempting the path for ever', () => {
+  // Recorded for 0.3.0, package is now 0.4.0: the entry is stale, and a stale entry must fail the
+  // build that carries it instead of quietly protecting nothing. This is the property that stops
+  // compat-breaks.json becoming a permanent hole with a date on it.
+  const split = applyAcceptedBreaks([removedField], [{ path: removedField.path, acceptedIn: '0.3.0', reason: REASON }], '0.4.0', '0.3.0');
+  assert.deepEqual(split.unwaived, [removedField]);
+  assert.equal(split.refusals.length, 1);
+  assert.match(split.refusals[0]!, /records one release/);
+});
+
+test('a waiver for a path that is not breaking is itself an error', () => {
+  // Every allowlist this estate has kept has decayed the same way: entries outlive the thing they
+  // described and the file stops meaning anything. Unused is an error, so it cannot.
+  const split = applyAcceptedBreaks([], [{ path: 'Token.gone', acceptedIn: '0.3.0', reason: REASON }], '0.3.0', '0.2.0');
+  assert.equal(split.refusals.length, 1);
+  assert.match(split.refusals[0]!, /is not breaking here/);
+});
+
+test('a waiver waives only the path it names', () => {
+  const split = applyAcceptedBreaks(
+    [removedField, otherRemoved],
+    [{ path: removedField.path, acceptedIn: '0.3.0', reason: REASON }],
+    '0.3.0',
+    '0.2.0',
+  );
+  assert.deepEqual(split.unwaived, [otherRemoved]);
+  assert.deepEqual(split.refusals, []);
+});
+
+test('an unversioned package cannot accept a break', () => {
+  // A break nobody can pin away from is not a break anybody accepted.
+  const split = applyAcceptedBreaks([removedField], [{ path: removedField.path, acceptedIn: '0.3.0', reason: REASON }], undefined, '0.2.0');
+  assert.ok(split.refusals.some((refusal) => /no major\.minor\.patch version/.test(refusal)));
+  assert.deepEqual(split.unwaived, [removedField]);
+});
+
+test('the waiver file is refused unless every entry says WHY, at length', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'cfcompat-waiver-'));
+  try {
+    const file = path.join(dir, 'compat-breaks.json');
+    assert.deepEqual(readAcceptedBreaks(dir), [], 'no file means no waivers, not an error');
+
+    writeFileSync(file, JSON.stringify({ path: 'A.b' }));
+    assert.throws(() => readAcceptedBreaks(dir), /must be an array/);
+
+    // 40 characters, the number `deploy/compose/estate/grant-gaps.json` arrived at the same way: a
+    // one-word reason is a field nobody read before filling in.
+    writeFileSync(file, JSON.stringify([{ path: 'A.b', acceptedIn: '0.3.0', reason: 'renamed' }]));
+    assert.throws(() => readAcceptedBreaks(dir), /at least 40 characters/);
+
+    writeFileSync(file, JSON.stringify([{ path: 'A.b', acceptedIn: 'next', reason: REASON }]));
+    assert.throws(() => readAcceptedBreaks(dir), /major\.minor\.patch/);
+
+    writeFileSync(file, JSON.stringify([{ acceptedIn: '0.3.0', reason: REASON }]));
+    assert.throws(() => readAcceptedBreaks(dir), /'path' must name/);
+
+    writeFileSync(file, JSON.stringify([{ path: 'A.b', acceptedIn: '0.3.0', reason: REASON }]));
+    assert.deepEqual(readAcceptedBreaks(dir), [{ path: 'A.b', acceptedIn: '0.3.0', reason: REASON }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('versions compare by number, not by string — 0.10.0 is after 0.9.0', () => {
+  // `'0.10.0' > '0.9.0'` is false as strings, which would refuse a legitimate bump at exactly the
+  // release where a package has shipped enough to have accumulated consumers.
+  assert.ok(compareVersions('0.10.0', '0.9.0') > 0);
+  assert.ok(compareVersions('1.0.0', '0.99.99') > 0);
+  assert.equal(compareVersions('0.3.0', '0.3.0'), 0);
+  assert.ok(Number.isNaN(compareVersions('0.3.0', undefined)));
+  // A prerelease suffix compares on its release numbers rather than being refused outright.
+  assert.equal(compareVersions('0.3.0-rc.1', '0.3.0'), 0);
 });

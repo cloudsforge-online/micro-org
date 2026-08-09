@@ -617,6 +617,7 @@ export function compareSurfaces(base: Surface, head: Surface): Finding[] {
 
 interface PackageManifest {
   name?: string;
+  version?: string;
   types?: string;
   main?: string;
 }
@@ -705,6 +706,179 @@ export function checkoutPackageAtRef(repoRoot: string, relativeDir: string, ref:
 }
 
 // ---------------------------------------------------------------------------------------------
+// Accepted breaks
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A break this package has decided to take, recorded in `compat-breaks.json` beside its
+ * package.json.
+ *
+ * ── WHY A GATE THAT CANNOT BE SATISFIED IS A GATE THAT GETS BYPASSED ─────────────────────────
+ *
+ * Until 2026-08-09 the only two ways past a breaking finding were "do not fix the bug" and "merge
+ * red". micro-sdk#1 is the case that proved it: micro-mint removed `priceShards` from its
+ * catalogue when SHARD was retired, `@cloudsforge/sdk` still decoded that field with the STRICT
+ * decoder, and so every live `cf mint catalogue` and every third-party call through
+ * `decodeCatalogue` threw. The three ways to fix it that this checker accepts are all worse than
+ * the break — synthesising a value puts a retired unit's name on a price nobody was quoted in it,
+ * and keeping the field unfilled is a `bigint` that is `undefined` at run time, which is a hole
+ * with a plausible name over it. The correct fix removes two fields, and there was no way to say
+ * so. The header of this file argues that a removed field is a runtime failure in a repository
+ * nobody is looking at; it is equally true that a client demanding a field the server stopped
+ * sending is a runtime failure right now, in every caller.
+ *
+ * So the answer is not to weaken the rule but to make taking a break COST something and LEAVE A
+ * RECORD. Five conditions, each of which is itself exit 1:
+ *
+ *   1. Every entry carries a `reason` of at least 40 characters. The number is borrowed from
+ *      `deploy/compose/estate/grant-gaps.json`, which learned it the same way: a one-word reason
+ *      is a field nobody read before filling in.
+ *   2. `acceptedIn` equals the package's CURRENT version. The waiver therefore expires the moment
+ *      the version moves on — it records one release rather than exempting a path for ever, and
+ *      a stale entry fails the build that carries it instead of quietly protecting nothing.
+ *   3. The head version is strictly greater than the base version. This is the condition that
+ *      makes the mechanism honest rather than decorative: a break cannot be recorded without also
+ *      publishing a new version, which is exactly what a consumer pinning a version needs in
+ *      order not to receive it by surprise.
+ *   4. Every entry matches a breaking finding that is actually present. An unused waiver is an
+ *      error, so the file cannot accumulate claims about paths nobody is breaking — the failure
+ *      mode of every allowlist this estate has kept.
+ *   5. The file is read from the HEAD tree only. A waiver that could be read from the base ref
+ *      would let a break be pre-authorised by a commit the reviewer of the breaking PR never saw.
+ *
+ * What it deliberately does NOT do is silence the finding. A waived break is printed, with its
+ * reason, and counted in the summary line, because the log of the run that shipped it is the
+ * record. `::notice::` rather than `::error::` — annotated in the PR, not failing it.
+ */
+export interface AcceptedBreak {
+  readonly path: string;
+  readonly acceptedIn: string;
+  readonly reason: string;
+}
+
+const MIN_REASON = 40;
+
+/** Parsed `major.minor.patch`, or undefined for anything this checker will not compare. */
+export function parseVersion(value: string | undefined): readonly number[] | undefined {
+  if (!value) return undefined;
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value.trim());
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+/** Negative, zero or positive, like every other comparator. Undefined on either side is `NaN`. */
+export function compareVersions(a: string | undefined, b: string | undefined): number {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  if (!left || !right) return Number.NaN;
+  for (let i = 0; i < 3; i += 1) {
+    if (left[i]! !== right[i]!) return left[i]! - right[i]!;
+  }
+  return 0;
+}
+
+export function versionOf(packageDir: string): string | undefined {
+  const manifestPath = path.join(packageDir, 'package.json');
+  if (!existsSync(manifestPath)) return undefined;
+  return (JSON.parse(readFileSync(manifestPath, 'utf8')) as PackageManifest).version;
+}
+
+export function readAcceptedBreaks(packageDir: string): readonly AcceptedBreak[] {
+  const file = path.join(packageDir, 'compat-breaks.json');
+  if (!existsSync(file)) return [];
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  if (!Array.isArray(parsed)) {
+    throw new Error('compat-breaks.json must be an array of { path, acceptedIn, reason }');
+  }
+  return parsed.map((entry, index) => {
+    const record = entry as Partial<AcceptedBreak>;
+    if (typeof record.path !== 'string' || record.path === '') {
+      throw new Error(`compat-breaks.json[${index}]: 'path' must name the broken path`);
+    }
+    if (parseVersion(record.acceptedIn) === undefined) {
+      throw new Error(`compat-breaks.json[${index}]: 'acceptedIn' must be a major.minor.patch version`);
+    }
+    if (typeof record.reason !== 'string' || record.reason.trim().length < MIN_REASON) {
+      throw new Error(
+        `compat-breaks.json[${index}]: 'reason' must be at least ${MIN_REASON} characters — ` +
+          'say what the consumer is supposed to do instead',
+      );
+    }
+    return { path: record.path, acceptedIn: record.acceptedIn!, reason: record.reason };
+  });
+}
+
+export interface WaiverSplit {
+  readonly waived: readonly (Finding & { readonly reason: string })[];
+  readonly unwaived: readonly Finding[];
+  /** Reasons the waiver file itself is refused. Non-empty means exit 1 regardless of findings. */
+  readonly refusals: readonly string[];
+}
+
+/** Apply the accepted-break file to a set of breaking findings. Pure, so the suite can drive it. */
+export function applyAcceptedBreaks(
+  breaking: readonly Finding[],
+  accepted: readonly AcceptedBreak[],
+  headVersion: string | undefined,
+  baseVersion: string | undefined,
+): WaiverSplit {
+  if (accepted.length === 0) return { waived: [], unwaived: breaking, refusals: [] };
+
+  const refusals: string[] = [];
+  if (parseVersion(headVersion) === undefined) {
+    refusals.push(
+      "compat-breaks.json is present but this package's package.json has no major.minor.patch " +
+        'version — a break nobody can pin away from is not a break anybody accepted',
+    );
+  }
+  const bumped = compareVersions(headVersion, baseVersion);
+  if (Number.isNaN(bumped)) {
+    // A package that had no version at the base ref cannot have one compared against it. Treat it
+    // as unbumped rather than as satisfied: silence here is the whole hole this guards.
+    refusals.push(
+      `compat-breaks.json requires a version bump, and the base ref's version (${baseVersion ?? 'absent'}) ` +
+        `cannot be compared with this one (${headVersion ?? 'absent'})`,
+    );
+  } else if (bumped <= 0) {
+    refusals.push(
+      `compat-breaks.json accepts a break at ${headVersion}, which is not greater than the base ref's ` +
+        `${baseVersion}. A break must ship a new version, or a consumer pinned to the old one receives it`,
+    );
+  }
+
+  const byPath = new Map(accepted.map((entry) => [entry.path, entry]));
+  const waived: (Finding & { reason: string })[] = [];
+  const unwaived: Finding[] = [];
+  const used = new Set<string>();
+  for (const finding of breaking) {
+    const entry = byPath.get(finding.path);
+    if (!entry) {
+      unwaived.push(finding);
+      continue;
+    }
+    used.add(entry.path);
+    if (compareVersions(entry.acceptedIn, headVersion) !== 0) {
+      refusals.push(
+        `compat-breaks.json accepts '${entry.path}' in ${entry.acceptedIn}, but this package is ` +
+          `${headVersion ?? 'unversioned'}. A waiver records one release; delete it or re-take the break`,
+      );
+      unwaived.push(finding);
+      continue;
+    }
+    waived.push({ ...finding, reason: entry.reason });
+  }
+  for (const entry of accepted) {
+    if (used.has(entry.path)) continue;
+    refusals.push(
+      `compat-breaks.json accepts '${entry.path}', which is not breaking here. Delete the entry — ` +
+        'an allowlist nobody prunes is an allowlist that stops describing anything',
+    );
+  }
+
+  return { waived, unwaived, refusals };
+}
+
+// ---------------------------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------------------------
 
@@ -738,8 +912,17 @@ function main(argv: readonly string[]): number {
     const headSurface = surfaceOfEntry(entryFileOf(packageDir));
     const findings = compareSurfaces(baseSurface, headSurface);
 
-    const breaking = findings.filter((finding) => finding.breaking);
+    const allBreaking = findings.filter((finding) => finding.breaking);
     const additive = findings.filter((finding) => !finding.breaking);
+    // Read from the head tree only, on purpose — see AcceptedBreak. A waiver readable at the base
+    // ref would let a break be pre-authorised by a commit the breaking PR's reviewer never saw.
+    const { waived, unwaived, refusals } = applyAcceptedBreaks(
+      allBreaking,
+      readAcceptedBreaks(packageDir),
+      versionOf(packageDir),
+      versionOf(base.packageDir),
+    );
+    const breaking = unwaived;
 
     // A lopsided note count means one side resolved imports the other did not, so a reported
     // difference may be an artefact. Say so before the findings, not after.
@@ -756,18 +939,36 @@ function main(argv: readonly string[]): number {
     for (const finding of additive) {
       process.stdout.write(`  + ${finding.path}\n`);
     }
+    // A waived break is announced, never silenced: the log of the run that shipped it is the
+    // record, and a notice is annotated on the PR without failing it.
+    for (const finding of waived) {
+      process.stdout.write(
+        `::notice::${finding.path}: ${finding.kind}, ACCEPTED in ${versionOf(packageDir)} — ${finding.reason}\n`,
+      );
+    }
     for (const finding of breaking) {
       process.stdout.write(`::error::${finding.path}: ${finding.kind} — ${finding.detail}\n`);
     }
+    for (const refusal of refusals) {
+      process.stdout.write(`::error::${refusal}\n`);
+    }
 
-    if (breaking.length > 0) {
-      process.stdout.write(
-        `\n${breaking.length} breaking change(s). Contracts evolve additively (AD-02): a removed field, ` +
-          'a narrowed type or a renamed key needs a new field alongside the old one, not an edit to it.\n',
-      );
+    if (breaking.length > 0 || refusals.length > 0) {
+      if (breaking.length > 0) {
+        process.stdout.write(
+          `\n${breaking.length} breaking change(s). Contracts evolve additively (AD-02): a removed field, ` +
+            'a narrowed type or a renamed key needs a new field alongside the old one, not an edit to it.\n' +
+            'If the additive form is genuinely worse than the break — a client demanding a field the server ' +
+            'stopped sending is a runtime failure too — record it in compat-breaks.json beside package.json ' +
+            'and ship a version bump with it.\n',
+        );
+      }
       return 1;
     }
-    process.stdout.write(`ok: ${additive.length} additive or widening change(s), nothing removed or narrowed\n`);
+    const accepted = waived.length > 0 ? `, ${waived.length} accepted break(s)` : '';
+    process.stdout.write(
+      `ok: ${additive.length} additive or widening change(s), nothing removed or narrowed${accepted}\n`,
+    );
     return 0;
   } finally {
     base.cleanup();
