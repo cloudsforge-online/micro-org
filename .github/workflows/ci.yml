@@ -64,6 +64,35 @@ jobs:
           node --import tsx tools/cfctl.ts doctor
           echo "ok: cfctl list and doctor run"
 
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # THE ONE CHECK IN THIS FILE THAT LEAVES THE RUNNER, AND WHY IT IS HERE RATHER THAN NIGHTLY.
+      #
+      # micro-org#352 replaced five permanent `cfctl doctor` FAILs with three registry rows that
+      # RECORD what is in front of users for the wallet clients — today, "nothing, since
+      # 2026-08-10, and here is what each is waiting on". A recorded fact whose only guarantee is
+      # that somebody wrote it down once is a comment, and deleting five failures to leave a
+      # comment behind would make this estate quieter and less informed than it was.
+      #
+      # So the record is checked against GitHub, and it is checked HERE because this is where the
+      # record lives: a pull request that changes a client's distribution row is graded by the
+      # same run that proposes it. estate-ci.yml is the wrong home for the same reason its own
+      # closing note gives — it is for invariants no single repository can check, and this one
+      # needs no checkout at all, only the registry in this repository and a public API.
+      #
+      # `--verify` treats an unanswerable question as a FAILURE rather than a pass, so this step
+      # can go red on a GitHub outage. That is the intended trade and it is the same one
+      # `release --verify` makes: a verification that did not run has not verified anything. The
+      # offline half of the same command — a client whose workflows have grown a step that
+      # publishes — runs wherever the checkouts are, which on this runner is nowhere, and reports
+      # each absent client as `info` rather than pretending to have looked.
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      - name: Every client's distribution record still matches what GitHub has published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --import tsx tools/cfctl.ts clients --verify
+
       # A reusable workflow that does not parse is discovered by the repository that calls it,
       # which is the worst place to discover it: somebody else's red build, for a change they did
       # not make.

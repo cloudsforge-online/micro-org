@@ -16,16 +16,37 @@
 // 61 directories, so seventeen repositories were invisible to `cfctl list`, `clone`, `pull`,
 // `doctor` and `release` at once. One of them was `micro-emberkin`, which is one of the three
 // repositories the ledger account-type defect was actually found in; `estate-ci.yml`'s header
-// names this file as the reason it derives its repository list from the GitHub API instead. All 73
-// are here now — 62 managed, 11 kept — and `cfctl doctor` FAILS on a directory beside the estate
+// names this file as the reason it derives its repository list from the GitHub API instead. All 78
+// are here now — 67 managed, 11 kept — and `cfctl doctor` FAILS on a directory beside the estate
 // that no row names, so the omission cannot happen quietly a third time.
 //
 // That count is maintained by hand and it had already drifted once: it read "70 … 59 managed" on
 // 2026-08-09 while the file held 71 rows and 60 managed ones, because the two operator consoles
 // were appended below and this paragraph was not touched. `test/cfctl.test.ts` asserts the real
 // numbers, so the drift was in the prose and nowhere else — but a paragraph whose whole argument
-// is "one list, and it is complete" cannot be allowed to miscount the list. Corrected here in the
-// same change that adds `pool` and `pool-web`, which took it from 71 to 73.
+// is "one list, and it is complete" cannot be allowed to miscount the list. Corrected then in the
+// same change that added `pool` and `pool-web`, which took it from 71 to 73, and corrected again
+// here at 78 — see the next paragraph, which is the third time the omission this file exists to
+// prevent had happened and the first time the machinery caught it unaided.
+//
+// ── 73 → 78: THE FIVE WALLET CLIENTS, AND WHAT FIVE PERMANENT FAILURES COST (micro-org#352) ────
+//
+// `micro-hearth-wallet-core`, `micro-wallet-assets`, `micro-wallet-desktop`, `micro-wallet-extension`
+// and `micro-wallet-mobile` are the five repositories 25-wallet-clients.md §9 creates. All five
+// have been checked out beside the estate since 2026-08-06 and were named by no row here, so
+// `cfctl doctor` reported five FAILs — measured 2026-08-10 while cutting 2.5.15, and still five
+// on 2026-08-10 at the head of this branch.
+//
+// That is the check working, and it is also the check being spent. A failure that is always there
+// is a failure nobody reads; a sixth, real one would have arrived into a list that already looked
+// like that and been indistinguishable from the wallpaper. The seventeen-repository gap this file
+// was widened to close was found by a person reading a second repository for an unrelated reason,
+// which is the state doctor exists to end — and a permanently-red doctor returns the estate to it
+// with a green-looking tool in the way.
+//
+// The five are three kinds, not one, and each is argued from what the repository IS rather than
+// from the name it shares with the other four: see `library()` for the core, `assets()` for the
+// art, and `client()` — new here — for the three shells.
 //
 // `.github` is the one organisation repository with no row, and its omission is argued rather than
 // merely true: see the org-infrastructure block below.
@@ -67,7 +88,7 @@
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 
 /** Every kind cfctl may clone, pull, inspect or release. `kept` is deliberately not among them. */
-export type ManagedKind = 'service' | 'web' | 'ops' | 'library' | 'assets' | 'template' | 'org';
+export type ManagedKind = 'service' | 'web' | 'ops' | 'library' | 'assets' | 'client' | 'template' | 'org';
 
 export type RepoKind = ManagedKind | 'kept';
 
@@ -94,14 +115,119 @@ interface RepoBase {
 }
 
 /**
- * A repository cfctl may act on. Every write path in cfctl takes this type and not `Repo`.
+ * Where a client build is, and since when.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * THE MANIFEST'S QUESTION, ASKED OF THE THINGS THE MANIFEST CANNOT NAME (micro-org#352 item 3).
+ *
+ * A release manifest names 48 container images and answers, for each one, "which artifact, built
+ * from which commit, is deployed". A desktop binary is not a container image, a browser extension
+ * is not one, an Android bundle is not one — so the estate's single mechanism for saying what is
+ * shipped could say NOTHING AT ALL about the three clients: not "shipped", not "not shipped", not
+ * "shipped at what version". `releases/README.md` argues that a release must be a file rather than
+ * a tag because "a release where one of the seven was forgotten looks exactly like a release where
+ * it was not". These were forgotten by construction — they were not in the file, and there was no
+ * file they could be in.
+ *
+ * The honest state today is **built, deliberately not distributed**, and until this field existed
+ * that state was only INFERABLE — from five doctor failures whose message was about registry rows
+ * and not about distribution at all. Deleting those five failures and adding nothing would have
+ * made the estate quieter and less informed than before: a regression wearing a green tick.
+ *
+ * So it is recorded, and three properties make it hard to let drift:
+ *
+ *   1. **REQUIRED IN THE TYPE.** `ClientRepo` has no optional `distribution`, and `client()` takes
+ *      it as a parameter with no default. A client row that answers nothing is a compile error, in
+ *      the same way `kept(…, managed: true)` is. `ManifestService.digest` is "required in the type,
+ *      empty-able in the file" for the same reason: the defect being fixed is a field nobody
+ *      recorded, and making it a field a caller MAY forget rebuilds the defect one row at a time.
+ *   2. **THE TWO STATES CARRY DIFFERENT FIELDS.** `none` has no artifact, no version and no commit,
+ *      so "not distributed, at version 1.0.0" cannot be written. `distributed` requires all four,
+ *      so "shipped, somewhere, somehow" cannot be either. A half-answer is not a value.
+ *   3. **IT IS CHECKED AGAINST THE WORLD, NOT TRUSTED.** `cfctl clients` prints it beside the
+ *      measured version and HEAD of each checkout; `cfctl clients --verify` asks GitHub what each
+ *      client repository has actually published. A `none` record and a published release is the
+ *      loud failure — see `distributionVerdict` in cfctl.ts, and the residual it names honestly.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
-export interface ManagedRepo extends RepoBase {
-  readonly kind: ManagedKind;
+export type Distribution =
+  | {
+      readonly state: 'none';
+      /** ISO date the decision was recorded. Not the date the repository was created. */
+      readonly since: string;
+      /**
+       * What has to exist before this can change — and every entry is OWNER-LEVEL.
+       *
+       * micro-org#352 item 2 says so in as many words: an extension needs a store listing and a
+       * signing key, a desktop build needs code-signing and notarisation, a mobile build needs a
+       * developer account. None of those is a thing a tool creates, and this field is the reason
+       * the state is a recorded decision rather than an accident: an omission that is written down
+       * is a decision, and one that is not is the crucible bug (see the header).
+       */
+      readonly blockedOn: readonly string[];
+    }
+  | {
+      readonly state: 'distributed';
+      /** ISO date this artifact went in front of users. */
+      readonly since: string;
+      /** Where a user gets it, spelled in full — a store URL, or the release page. */
+      readonly channel: string;
+      /** The artifact's exact published name. What `--verify` looks for, and what a user downloads. */
+      readonly artifact: string;
+      /** The client's package.json version when it was published. Matched against the release tag. */
+      readonly version: string;
+      /** The commit it was built from. The manifest's `commit`, for a thing that has no image. */
+      readonly commit: string;
+    };
+
+/**
+ * A repository cfctl may act on. Every write path in cfctl takes this type and not `Repo`.
+ *
+ * ── A UNION SINCE 2026-08-10, AND THE SPLIT IS LOAD-BEARING RATHER THAN TIDY ───────────────────
+ *
+ * This was one interface with `kind: ManagedKind`. Under that shape a row could be written inline
+ * as `{ kind: 'client', … }` with no `distribution` at all and it would compile — the field would
+ * be a convention, and a convention is what `foresight-admin-web`'s `deployable: true` was on a
+ * kept row before `kept` became a type. Discriminated on `kind`, `kind: 'client'` selects the only
+ * branch that exists for it, and that branch has no optional fields. There is no client row that
+ * does not say where its build is.
+ *
+ * Nothing else moved. Both members carry every field `ManagedRepo` carried, so every signature in
+ * cfctl that takes a `ManagedRepo` — `repoDir`, `inspect`, `imageFor`, `gitWrite`, `cloneUrl` —
+ * takes both members unchanged, and `managedRepos()` still returns the one type every write path
+ * demands.
+ */
+export type ManagedRepo = NonClientRepo | ClientRepo;
+
+/**
+ * Everything managed that is not a client: service, web, ops, library, assets, template, org.
+ *
+ * The name is negative on purpose. The only thing these seven kinds have in common is that a user
+ * never installs one — the estate runs them, publishes them or generates them — and a name that
+ * claimed more than that ('estate', 'internal', 'hosted') would be wrong about at least two of
+ * them. `library` and `assets` are neither run nor installed.
+ */
+export interface NonClientRepo extends RepoBase {
+  readonly kind: Exclude<ManagedKind, 'client'>;
   readonly managed: true;
   // Whether a release manifest pins an image for it. Libraries publish packages, assets publish
   // bytes, and neither publishes an image.
   readonly deployable: boolean;
+}
+
+/**
+ * A build a user installs, rather than a service the estate runs or a package a developer resolves.
+ *
+ * `deployable` is literal `false` rather than a field with a value, for the reason `KeptRepo` gives
+ * for `managed`: it is one keystroke from `true` on a row, and nothing would notice until a release
+ * manifest pinned `ghcr.io/<org>/micro-wallet-desktop` for an image that has never existed. See
+ * `client()` for why no existing kind fits and what each wrong one would have broken.
+ */
+export interface ClientRepo extends RepoBase {
+  readonly kind: 'client';
+  readonly managed: true;
+  readonly deployable: false;
+  readonly distribution: Distribution;
 }
 
 /**
@@ -167,6 +293,74 @@ function library(name: string, phase: string, owns: string): ManagedRepo {
  */
 function assets(name: string, phase: string, owns: string): ManagedRepo {
   return { name, repo: `micro-${name}`, kind: 'assets', phase, path: `micro/${name}`, managed: true, deployable: false, owns };
+}
+
+/**
+ * A wallet client: a build a USER INSTALLS, on a machine this estate does not own.
+ *
+ * Its own kind because none of the seven that existed fits, and the wrong ones fail in ways this
+ * file has already paid for once. Measured on the three repositories this constructor is for, all
+ * on 2026-08-10: `micro-wallet-desktop` 0.1.0, `micro-wallet-extension` 1.0.0 and
+ * `micro-wallet-mobile` 0.1.0 are each `"private": true`, with no `main`, no `files`, no exports
+ * map and no Dockerfile. They publish no package, build no container image, and are served by no
+ * gateway.
+ *
+ *   * NOT `web` OR `service`. Both set `deployable: true`, which would put
+ *     `ghcr.io/<org>/micro-wallet-desktop` into the next release manifest for an image that has
+ *     never existed — the exact failure the `foresight-admin-web` tombstone argument below refuses
+ *     ("a release manifest pinning a retired console, which nothing would catch until a deploy")
+ *     and the one `assets()` states in its own words ("a release manifest that named one would be
+ *     pinning a tag that cannot be pulled"). It would also consume three numbers from the derived
+ *     port block, for three programmes that never bind a port. 25-wallet-clients.md §10.2 says the
+ *     same thing from the other side: "They are clients. They are not services, they have no
+ *     database, they are not in the registry's deployable set, and they consume no port from the
+ *     derived block."
+ *   * NOT `library`. 03 §1.4 defines a library repository as one that PUBLISHES PACKAGES, and all
+ *     three are private. `library` is also the kind `cfctl doctor` builds its "which @cloudsforge
+ *     package can a consumer resolve" map from (`localPackageVersions` in cfctl.ts), so a private
+ *     application's version would become an answer to a question nobody asked — `assets()` refuses
+ *     `library` for that same second reason.
+ *   * NOT `ops` OR `org`. Both mean machinery the estate runs for itself. These run on a user's
+ *     laptop and phone, and the whole point of 25 §1 is that the platform cannot reach them: "this
+ *     is the wallet where YOU hold the key and the platform cannot move your money".
+ *
+ * What a client actually is, mechanically: a fourth consumption mechanism, next to "pull an image",
+ * "install a package" and — `assets()`'s third — "materialise a set of bytes by identity". A user
+ * downloads and installs it, from a store or a signed file, and after that the estate has no way to
+ * move it. That is why `distribution` is a required field and not a nicety: for the other three
+ * mechanisms the estate can ASK what is out there (GHCR serves a digest, a registry serves a
+ * version, a manifest names a file), and for this one it cannot. What is in front of users is a
+ * fact somebody has to write down.
+ *
+ * `managed: true` — cfctl clones and pulls these, exactly as it does the other 64. They are this
+ * organisation's repositories, their remotes are `cloudsforge-online/micro-wallet-*`, and there is
+ * nothing about "a user installs it" that makes a fast-forward dangerous.
+ *
+ * `deployable: false` IN THE CONSTRUCTOR AND IN THE TYPE, with no parameter for it. `ClientRepo`
+ * declares it as the literal `false`, so a future edit cannot flip it on one row: `client(…)` has
+ * no argument to pass and `{ kind: 'client', deployable: true }` does not type-check. The header's
+ * argument for `kept` applies unchanged — a flag is one keystroke from wrong and nothing notices.
+ *
+ * CI is not checked for these, and that is a decision rather than an oversight: `cfctl doctor`'s
+ * bespoke-CI check names the kinds it applies to (service, web, ops, library) and `client` is not
+ * among them. `service-ci.yml` asserts /livez, /readyz, /metrics and a Dockerfile, and `web-ci.yml`
+ * asserts an nginx image; a Tauri build, an MV3 bundle and a React Native bundle satisfy none of
+ * those and forcing them through would mean weakening the rules for everyone else — the argument
+ * `micro-hearth-wallet-core`'s own ci.yml already makes for a library. All three do call the
+ * reusable `secret-hygiene.yml`, which is the check that applies to any repository whatever it is.
+ */
+function client(name: string, phase: string, distribution: Distribution, owns: string): ClientRepo {
+  return {
+    name,
+    repo: `micro-${name}`,
+    kind: 'client',
+    phase,
+    path: `micro/${name}`,
+    managed: true,
+    deployable: false,
+    distribution,
+    owns,
+  };
 }
 
 /**
@@ -297,24 +491,141 @@ export const REGISTRY: readonly Repo[] = [
   ops('beacon', 'P3', 'Synthetic monitoring, journeys, incidents, SLOs. The release gate (AD-04)'),
   ops('faucet', 'P3', 'Testnet EMBER faucet'),
 
-  // -- 4 library repositories (03 §1.4) -------------------------------------------------------
+  // -- 5 library repositories (03 §1.4, plus one it predates) ----------------------------------
   // Phases: 03 §1.4 gives no phase column, because a library repository has no split of its own.
   // The phase recorded here is the phase of its first consumer, which is what makes it blocking.
   library('contracts', 'P2', '@cloudsforge/contracts-auth, -money, -chain, -market, -worlds, -create, -events, -devplatform'),
   library('runtime', 'P2', '@cloudsforge/telemetry, -http, -jobs, -auth, -db, -lifecycle, -policy-client'),
   library('ui', 'P2', '@cloudsforge/ui, @cloudsforge/ui-charts'),
   library('sdk', 'P11', '@cloudsforge/sdk, @cloudsforge/cli — public, generated from the public OpenAPI'),
+  // -- a fifth library, from 25-wallet-clients.md §3 -------------------------------------------
+  //
+  // `library` ON THE EVIDENCE, NOT ON THE NAME IT SHARES WITH THE THREE CLIENTS BELOW. 03 §1.4
+  // defines a library repository as one that PUBLISHES PACKAGES, and this is the only one of the
+  // five wallet repositories that does. Measured 2026-08-10: `package.json` is
+  // `@cloudsforge/hearth-wallet-core@1.0.0`, it has NO `"private": true`, it carries
+  // `files: ["dist", "src", "!src/**/*.test.ts"]` and a `prepack` script, and all three clients
+  // resolve it as a dependency — two by `link:` to the sibling checkout and one by a pinned
+  // `github:` ref. That is a package with consumers, which is the whole of the test.
+  //
+  // The kind is not cosmetic here: `library` is what puts a repository into `cfctl doctor`'s
+  // "which @cloudsforge package can a consumer resolve" map (`localPackageVersions` in cfctl.ts),
+  // and this package has three consumers whose ranges doctor should be evaluating. `assets()`
+  // refuses `library` precisely BECAUSE nothing resolves an asset repository; the same sentence
+  // read the other way is why this row is one.
+  //
+  // Its package name is added to ALLOWED_SCOPED_PACKAGES below and to service-ci.yml's
+  // `allow-match` in the same change. Without that, registering the three clients would have
+  // traded five doctor FAILs for three: `@cloudsforge/hearth-wallet-core` is in the scope, and
+  // doctor fails any manifest importing a scoped name the estate has not declared. The list is
+  // kept in one place "so service-ci.yml and cfctl doctor cannot disagree about it", and they
+  // disagreed for four days over `@cloudsforge/secrets` when somebody edited one copy.
+  //
+  // No image, no port, `deployable: false` from `library()` — it is pure TypeScript with zero
+  // runtime dependencies, no Node built-ins and no DOM, because 25 §3 requires it to run unmodified
+  // inside a Tauri webview, a React Native JSI context and an MV3 service worker.
+  library('hearth-wallet-core', '25', '@cloudsforge/hearth-wallet-core — BIP-39/32/44, secp256k1, keccak, RLP, EIP-155/1559/712, the keystore, and the differential suite against hearth/node'),
 
-  // -- 4 asset repositories -------------------------------------------------------------------
-  // See `assets()` for why this is a kind rather than a library. All four are byte-identical in
+  // -- 5 asset repositories -------------------------------------------------------------------
+  // See `assets()` for why this is a kind rather than a library. All five are byte-identical in
   // shape — the same `materialise.py`, `MANIFEST.json`, `candidates/` and provenance layout — and
   // 24-asset-model-comparison.md treats them as one class, which is what that document is for.
+  // (Four until 2026-08-10; `wallet-assets` is the fifth and its evidence is beside its row.)
   // The generated reference sets are PERMANENT by instruction: a challenger model writes to
   // `candidates/` and never over `assets/`.
   assets('brand', '—', 'Platform brand assets: 73 generated, grounds normalised to #12100f, per-asset provenance'),
   assets('emberkin-assets', '19', 'Kindred art: 83 assets from the visuals.json spec the game already ships'),
   assets('aetherholm-assets', '20', 'Art bible, canonical content trees, generated art with per-asset provenance'),
   assets('tessera-assets', '23', 'Ground, object and ward art, and the content JSON the engine and the prompts share'),
+  // The fifth, and `assets()`'s own docstring already states the test it passes. Measured
+  // 2026-08-10: `micro-wallet-assets` has NO `package.json` at all — so it is not a library and
+  // not a client, because there is no package to publish and no build to install — and it holds
+  // `MANIFEST.json`, `assets/`, `content/`, `PLAN.json`, `LICENSE-ASSETS` and the same
+  // generate/verify/normalise Python layout the other four carry. It is "a set of bytes resolved
+  // by identity": a consumer runs the materialise step and holds a committed copy under its own
+  // path, which is exactly what the three clients above it do (`sync-art` and `prove:art` are
+  // scripts in all three of their package.json files).
+  //
+  // 25-wallet-clients.md §9 lists it beside the four client repositories, and that is a table of
+  // what to CREATE rather than a claim about kind. The layout on disk is the evidence, and it is
+  // byte-for-byte the shape 24-asset-model-comparison.md treats as one class.
+  assets('wallet-assets', '25', 'Wallet icons, illustrations and store assets in both model sets, with per-asset provenance and a plan derived from content/'),
+
+  // -- 3 wallet clients, from 25-wallet-clients.md §4 and §9 ------------------------------------
+  //
+  // FILED TIDILY RATHER THAN APPENDED, AND — UNLIKE THE TWO BLOCKS BELOW — THAT COST NOTHING.
+  //
+  // The operator consoles and the pool rows both had to be appended, and each block says why:
+  // ports derive from POSITION IN `deployableRepos()`, so a `web()` or `service()` inserted
+  // mid-list renumbers every derived port beneath it, including numbers micro-deploy's compose has
+  // already written down. That rule bites on DEPLOYABLE rows and only on those, because
+  // `deployableRepos()` filters `deployable` before position is counted at all.
+  //
+  // All five wallet rows are `deployable: false` — the three here by the literal in `ClientRepo`,
+  // the core by `library()`, the art by `assets()` — so none of them enters that list, and the
+  // list's order is untouched wherever they sit. Verified rather than reasoned: `DERIVED_PORT_ORDER`
+  // in test/cfctl.test.ts pins all 48 derived names in order and stayed green through this change,
+  // with `deployableRepos().length` still 48 and `pool-web` still last at 4147.
+  //
+  // So the reader learns the rule rather than the exception: appending is the only free edit FOR A
+  // DEPLOYABLE ROW. A row that cannot reach a manifest can go where it belongs.
+  //
+  // `phase: '25'` follows the convention `RepoBase.phase` documents for repositories 03 §1 does not
+  // enumerate — the ecosystem document that CREATES it, as `19`, `20`, `23` and `36` already do.
+  // 03 §1 predates all five and is not corrected for them: it is the P2-era target set of 46, and
+  // it names none of emberkin, foresight, aetherholm, tessera, pool or the two operator consoles
+  // either.
+  //
+  // Each row's `distribution` is the answer to the question a release manifest asks and cannot ask
+  // of these — see `Distribution` above. Today all three answer `none`, with a date and with the
+  // owner-level thing each is waiting on. `cfctl clients` prints it; `cfctl clients --verify` asks
+  // GitHub whether it is still true.
+  client(
+    'wallet-desktop',
+    '25',
+    {
+      state: 'none',
+      since: '2026-08-10',
+      // 25 §8 sequences desktop third, after the extension. None of these is a tool's decision.
+      blockedOn: [
+        'an Apple Developer ID certificate, for signing the macOS build',
+        'Apple notarisation, without which macOS Gatekeeper refuses the .dmg',
+        'a Windows Authenticode certificate, without which SmartScreen warns on every install',
+      ],
+    },
+    'Tauri v2 for Windows, macOS and Linux, the bundled Hearth node, and the desktop send/receive/token surfaces',
+  ),
+  client(
+    'wallet-extension',
+    '25',
+    {
+      state: 'none',
+      since: '2026-08-10',
+      // 25 §8 makes this phase 2 — "the fastest path to a real user doing a real thing" — so it is
+      // the row most likely to change state first, and the one this record most needs to be right
+      // about. §8 also notes that store listings GATE submission, which is why the asset repository
+      // above is a dependency of shipping rather than of building.
+      blockedOn: [
+        'a Chrome Web Store developer account and a published listing',
+        'an addons.mozilla.org account, for the signed Firefox build',
+        'a signing key held somewhere the estate has decided on',
+      ],
+    },
+    'MV3 for Chrome, Firefox, Opera and Edge, and the EIP-1193 and EIP-6963 provider',
+  ),
+  client(
+    'wallet-mobile',
+    '25',
+    {
+      state: 'none',
+      since: '2026-08-10',
+      blockedOn: [
+        'a Google Play developer account and an upload key',
+        'an Apple Developer Program membership, for TestFlight and the App Store',
+      ],
+    },
+    'React Native for Android and iOS, with native secure storage holding the keys',
+  ),
 
   // -- 3 pieces of organisation infrastructure (03 §1.6) --------------------------------------
   // 03 names the first of these `.github`. A repository literally called `.github` cannot carry
@@ -448,6 +759,24 @@ export function deployableRepos(): readonly ManagedRepo[] {
   return managedRepos().filter((repo) => repo.deployable);
 }
 
+/**
+ * The rows that answer "what is in front of users", because they are the only rows the question
+ * applies to.
+ *
+ * Narrowed on `kind` and not on a hand-written predicate over a wider type: `ManagedRepo` is a
+ * union discriminated on exactly that field, so this returns `ClientRepo[]` because the compiler
+ * agrees rather than because this function asserts it. `managedRepos()` above says the same thing
+ * about `managed`, and for the same reason — "the filter is what produces the type".
+ *
+ * `micro-hearth-wallet-core` and `micro-wallet-assets` are deliberately NOT here. A user never
+ * installs either: the core is a package three clients resolve, the art is bytes they materialise.
+ * Asking "which artifact is in front of users" of a library is asking a question whose answer is
+ * always the client that embedded it, which is the answer this list already gives.
+ */
+export function clientRepos(): readonly ClientRepo[] {
+  return managedRepos().filter((repo): repo is ClientRepo => repo.kind === 'client');
+}
+
 export function repoByName(name: string): Repo | undefined {
   return REGISTRY.find((repo) => repo.name === name);
 }
@@ -495,4 +824,13 @@ export const ALLOWED_SCOPED_PACKAGES: readonly string[] = [
   '@cloudsforge/sdk',
   '@cloudsforge/cli',
   '@cloudsforge/hearth-node',
+  // Added 2026-08-10 with the `hearth-wallet-core` row, and NOT as a formality. The three wallet
+  // clients each depend on this name, so the moment they became managed rows `cfctl doctor` began
+  // reading their manifests — and an undeclared scoped name is a `fail`, not a warning. Leaving it
+  // out would have traded five doctor failures for three, which is the shape of fix this file
+  // exists to refuse. It qualifies on the list's own test: `micro-hearth-wallet-core` is a
+  // `library()` row that publishes exactly this package, as `micro-contracts` publishes the eight
+  // above it. Added to service-ci.yml's `allow-match` in the same commit; test/cfctl.test.ts
+  // parses that workflow and requires the two to agree.
+  '@cloudsforge/hearth-wallet-core',
 ];
