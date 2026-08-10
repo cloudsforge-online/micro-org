@@ -664,7 +664,11 @@ test('every client records what is in front of users, with a date and a reason',
   // nothing at all about them — not shipped, not unshipped, not at what version. This asserts the
   // record can still answer it: a state, a date it has been true since, and either an artifact or
   // the reasons there is not one.
-  const today = new Date('2026-08-10T00:00:00Z');
+  // The clock, not a date written here. A hardcoded "today" would either age into a trap — the
+  // next client to be recorded gets a date this test calls the future — or be updated by whoever
+  // it inconveniences, which is the same thing more slowly. `since` in the past is a property of
+  // the record, not of the day the suite runs.
+  const today = new Date();
   for (const client of clientRepos()) {
     const record = client.distribution;
     assert.match(record.since, /^\d{4}-\d{2}-\d{2}$/, `${client.name}: since is not a date`);
