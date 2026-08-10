@@ -248,6 +248,9 @@ on:
       - 'tools/estate-scopes.mjs'
       - 'tools/estate-topics.mjs'
       - 'tools/estate-topic-gaps.json'
+      # Where the report LANDS is part of the mechanism too. micro-org#342: the selector that picks
+      # the issue was wrong for weeks and closed a person's retrospective with it.
+      - 'tools/ci-report-issue.mjs'
   pull_request:
     paths:
       - '.github/workflows/estate-ci.yml'
@@ -255,6 +258,7 @@ on:
       - 'tools/estate-scopes.mjs'
       - 'tools/estate-topics.mjs'
       - 'tools/estate-topic-gaps.json'
+      - 'tools/ci-report-issue.mjs'
   workflow_call:
     secrets:
       estate_token:
@@ -307,6 +311,11 @@ jobs:
       # go up. A ratchet that is only printed is a comment, and a ratchet that only checks one
       # direction never tightens.
       BODY_SCAN_BLIND_BASELINE: 37
+      # THE TITLE IS THE IDENTITY, so it is declared once and read three times: the step that opens
+      # the issue, the step that finds it to comment on, and the step that closes it. Two literals
+      # would be one edit away from a reporter that opens a fresh issue every night and never closes
+      # any of them, and that drift is invisible until the tracker has thirty of them (micro-org#342).
+      ESTATE_CI_ISSUE_TITLE: 'estate-ci: an invariant no repository can see is broken'
     steps:
       # ────────────────────────────────────────────────────────────────────────────────────────────
       # The estate, derived and cloned. THE LIST IS NOT WRITTEN DOWN — see the header.
@@ -1298,15 +1307,42 @@ jobs:
             --description "An invariant that spans repositories, so no single repository's CI can see it" \
             --force > /dev/null 2>&1 || true
 
-          open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
-                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          # The query stays as broad as it always was; the CHOOSING moved into a pure function that a
+          # test can put a human-authored decoy in front of (`tools/ci-report-issue.mjs`, and
+          # micro-org#342 for the retrospective this reporter commented on and then closed). It
+          # prints a number or nothing, and says on stderr which issues it declined and why.
+          #
+          # `TOOLS` is set by the step that resolves the checkers, and THIS step runs on failure —
+          # including a failure that happened before that step. So the selector may legitimately not
+          # be on disk, and `set -u` on an unset `$TOOLS` would kill the reporter itself, which is
+          # the one step that must survive.
+          selector="${TOOLS:-}/tools/ci-report-issue.mjs"
+          if [ -f "$selector" ]; then
+            open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
+                     --json number,title,author 2>/dev/null \
+                     | node "$selector" --title "$ESTATE_CI_ISSUE_TITLE" || true)
+          else
+            # Narrower than the `.[0]` this replaced and it cannot adopt a person's issue, but it is
+            # unverifiable from here: if either qualifier ever stops matching, this reports "nothing
+            # open" and the branch below opens a fresh issue every run. Hence the warning, and hence
+            # the selector being the normal path rather than this.
+            echo "::warning::the issue selector is not on disk (the run died before the checkers were resolved) — falling back to server-side author+title qualifiers"
+            open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
+                     --author app/github-actions --search "$ESTATE_CI_ISSUE_TITLE in:title" \
+                     --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          fi
+          # An issue number or nothing, never anything else. Found by running this block against a
+          # `gh` stub: an unexpected payload on stdout — a partial response, an error object, a
+          # changed `--jq` — otherwise becomes the ARGUMENT to `gh issue comment`, and a comment
+          # addressed to a garbage number is a step that fails for a reason nobody can read.
+          case "$open" in ''|*[!0-9]*) open="" ;; esac
           if [ -n "$open" ]; then
             gh issue comment "$open" --repo "$REPO" --body-file "$RUNNER_TEMP/issue.md" \
               || echo "::warning::could not comment on issue #${open} — is issues:write granted?"
             echo "updated issue #${open}"
           else
             gh issue create --repo "$REPO" --label estate-invariant \
-              --title "estate-ci: an invariant no repository can see is broken" \
+              --title "$ESTATE_CI_ISSUE_TITLE" \
               --body-file "$RUNNER_TEMP/issue.md" \
               || echo "::warning::could not open an issue — is issues:write granted?"
           fi
@@ -1319,9 +1355,23 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # REFUSES rather than closes when the issue it found is not its own — and says which one it
+          # declined, on stderr, from the selector. Closing the wrong issue and closing nothing used
+          # to produce the same log line, which is how micro-org#38 came to be closed by a run that
+          # had never read it. A refusal is deliberately NOT a failure: the sweep being green is a
+          # fact about the estate, and it must not go red over a fact about the issue tracker.
+          #
+          # This step only runs on success, so the checkers were resolved and the selector is there.
+          # If it somehow is not, this REFUSES rather than falling back: an issue left open is
+          # visible to everybody and costs a glance, and an issue closed by a rule nobody could
+          # check is invisible and costs the record. They are not symmetric.
+          selector="${TOOLS:-}/tools/ci-report-issue.mjs"
+          [ -f "$selector" ] || { echo "::warning::the issue selector is not on disk; refusing to close anything"; exit 0; }
           open=$(gh issue list --repo "$REPO" --state open --label estate-invariant \
-                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
-          [ -n "$open" ] || { echo "ok: nothing open"; exit 0; }
+                   --json number,title,author 2>/dev/null \
+                   | node "$selector" --title "$ESTATE_CI_ISSUE_TITLE" || true)
+          case "$open" in ''|*[!0-9]*) open="" ;; esac
+          [ -n "$open" ] || { echo "ok: nothing of this reporter's own is open"; exit 0; }
           gh issue close "$open" --repo "$REPO" \
             --comment "The sweep is green again: <${RUN_URL}>" \
             || echo "::warning::could not close issue #${open}"
