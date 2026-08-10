@@ -1367,3 +1367,71 @@ jobs:
       - name: Down
         if: always()
         run: docker rm -f "ci-${{ inputs.service }}" || true
+
+  # ══════════════════════════════════════════════════════════════════════════════════════════════
+  # WHO BREAKS WHEN THIS REPOSITORY MERGES — micro-org#304.
+  #
+  # This estate has tests that open a SIBLING checkout, read its source and assert the two agree.
+  # They run in the repository that HOLDS them, against whatever the sibling's main happens to be
+  # at that moment, so a merge here breaks a downstream repository silently and the breakage is
+  # found whenever somebody next opens a pull request there. Measured 2026-08-09: three
+  # repositories went red on `main` without anyone touching them, each within about an hour of the
+  # merge that caused it, and two were discovered by a RELEASE pull request whose whole content is
+  # a version-string bump.
+  #
+  # This job is the missing trigger, and it is one HTTP request. It does not clone anything, does
+  # not run anybody else's suite, and cannot go red for a defect the merging author did not cause:
+  # `test/workflow-shell.test.ts` in micro-org asserts that no per-repository workflow calls the
+  # estate sweep, because an estate-wide gate that turns a service's build red for somebody else's
+  # file is a gate that gets switched off within a week. The sweep itself runs in micro-org
+  # (`cross-repo.yml`), where the whole estate is already checked out and where a red blocks
+  # nothing outside micro-org.
+  #
+  # ONLY ON A MERGE TO main. A pull request has not changed what any downstream reads; a
+  # `release/**` or `feat/**` branch is not the ref any downstream resolves. Asking on those would
+  # sweep the estate against a commit nothing consumes.
+  # ══════════════════════════════════════════════════════════════════════════════════════════════
+  downstream:
+    name: Ask micro-org to run the checks that read this repository
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the cross-repository sweep
+        env:
+          # The token callers already pass for the sibling checkouts. Dispatching needs WRITE on
+          # micro-org, which a read-only estate token does not have — see the failure path below,
+          # which says so out loud rather than looking like it worked.
+          GH_TOKEN: ${{ secrets.estate_token || github.token }}
+          UPSTREAM: ${{ inputs.service }}
+          MERGED_SHA: ${{ github.sha }}
+          MERGED_BY: ${{ github.actor }}
+          MERGED_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          status=0
+          gh api -X POST "repos/cloudsforge-online/micro-org/dispatches" \
+            -f "event_type=upstream-merged" \
+            -f "client_payload[repo]=$UPSTREAM" \
+            -f "client_payload[sha]=$MERGED_SHA" \
+            -f "client_payload[actor]=$MERGED_BY" \
+            -f "client_payload[run]=$MERGED_RUN" \
+            > /dev/null 2>"$RUNNER_TEMP/dispatch.err" || status=$?
+
+          if [ "$status" -eq 0 ]; then
+            echo "ok: micro-org will run every check that reads '${UPSTREAM}' at ${MERGED_SHA}"
+            exit 0
+          fi
+
+          # A WARNING AND NOT A FAILURE, and the asymmetry is deliberate. The credential this needs
+          # belongs to the organisation, not to the person who just merged — failing their build
+          # over it is precisely the "red for a defect its author did not cause and cannot fix"
+          # that gets a check deleted. It is not silent either: the annotation below is on the
+          # merge, and micro-org's cross-repo.yml sweeps the whole estate nightly regardless, so an
+          # ungranted token costs LATENCY (the next morning instead of minutes) rather than the
+          # answer.
+          echo "::warning::could not ask micro-org to check the repositories that read '${UPSTREAM}'"
+          echo "The estate token needs contents:write on cloudsforge-online/micro-org to send a"
+          echo "repository_dispatch. Until it has it, the sweep runs on micro-org's nightly schedule"
+          echo "instead of on this merge — micro-org#304."
+          sed 's/^/  /' "$RUNNER_TEMP/dispatch.err" 2>/dev/null || true

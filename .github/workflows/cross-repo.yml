@@ -1,0 +1,468 @@
+name: cross-repo
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE CHECKS THAT READ A SIBLING REPOSITORY, RUN WHEN THE SIBLING MOVES.
+#
+# micro-org#304. This estate has a family of tests that open a sibling checkout, read its source and
+# assert the two repositories agree — the Send menu's asset list against `wallet/src/addresses.ts`,
+# the site's published numbers against the services that produce them. They are good checks and they
+# fail rather than skip when the sibling is missing, on purpose. NOTHING RAN THEM WHEN THE SIBLING
+# MOVED: they ran on the pull request of the repository that HELD them, against whatever the
+# sibling's main happened to be at that moment.
+#
+# Measured 2026-08-09: three repositories went red on `main` without anyone touching them, each
+# within about an hour of the upstream merge that caused it. Two were discovered by a release pull
+# request whose entire content is a version-string bump — so the release cut was acting as the
+# estate's cross-repository integration test, which is the worst available place to catch this. The
+# failure arrives attached to the one diff guaranteed to be innocent, at the moment the most work is
+# blocked behind it.
+#
+# This file is the trigger. `repository_dispatch` arrives from the upstream repository's own main
+# build — the sender is a step of `service-ci.yml` and `web-ci.yml`, so it cost no per-repository
+# file — and carries the repository that moved. The sweep then runs ONLY the checks that read that
+# repository (`cfctl cross --repo`), because running the rest would attribute an unrelated failure
+# to the merge being asked about, which is the release cut's mistake in miniature.
+#
+# ── WHY THE RED LANDS HERE AND NOT IN THE REPOSITORY THAT MERGED ──────────────────────────────────
+#
+# Two reasons, and the first is a fact about GitHub rather than a preference.
+#
+#   1. A reusable workflow declares `on: workflow_call` and nothing else. The trigger belongs to the
+#      CALLER's file. So the issue's first sketch — "a receiver in service-ci.yml, which every
+#      repository already calls, so the downstream side costs no per-repository file" — cannot
+#      exist: a `repository_dispatch:` trigger for micro-hub-web has to be written in
+#      micro-hub-web's own `ci.yml`. Fifty-five repository edits, one per downstream, and a second
+#      one every time an edge appears.
+#   2. Even if it could, an estate-wide gate that turns a service's build red for a defect its
+#      author did not cause and cannot fix is a gate that gets switched off within a week — the
+#      argument in `estate-ci.yml`'s header, and the reason `test/workflow-shell.test.ts` asserts
+#      that no per-repository workflow calls the estate sweep. The upstream therefore SENDS and
+#      does not wait: its dispatch costs one HTTP request, its image still publishes, and the red
+#      lands in micro-org, which blocks nothing outside micro-org.
+#
+# What the merging author gets instead of a red build: an issue in micro-org, labelled
+# `estate-invariant` like the nightly sweep's, naming their repository, their commit and their run.
+# That is the "attached to the change that caused it, while the person who made it is still holding
+# the context" the issue asked for, minus the ability to block the merge — which is option 3 in the
+# issue, deliberately not taken yet.
+#
+# ── WHAT IS STILL TRUE WHEN NO DISPATCH ARRIVES ───────────────────────────────────────────────────
+#
+# The schedule. A dispatch needs a token with write access to this repository (see the sender in
+# `service-ci.yml`), and a mechanism whose whole value depends on a credential nobody has granted
+# yet is a mechanism that reports success and does nothing — the failure this issue is about, one
+# layer up. So the nightly run asks the same question of the whole estate with no dispatch and no
+# credential involved, and the dispatch's contribution is LATENCY: minutes after the merge instead
+# of the next morning. Both are better than "whenever somebody next cuts a release".
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+on:
+  # The merge trigger. Sent by service-ci.yml and web-ci.yml from the upstream repository's main
+  # build; `client_payload.repo` is the registry name of the repository that moved.
+  repository_dispatch:
+    types: [upstream-merged]
+
+  # 05:41 UTC, off the hour for the same reason estate-ci.yml is: the hour is where every cron in
+  # every estate piles up and where GitHub's scheduler is most likely to delay or drop a run.
+  schedule:
+    - cron: '41 5 * * *'
+
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: One registry name — 'wallet', 'contracts'. Empty sweeps the whole estate.
+        required: false
+        default: ''
+        type: string
+
+  # A change to the mechanism re-proves the mechanism, exactly as estate-ci.yml does it: the pull
+  # request tells the author whether it still works, and the push tells the repository whether it
+  # works on main, which is the only ref the schedule will ever use. `service-ci.yml` and
+  # `web-ci.yml` are here because they hold the SENDER — the half that decides whether this file
+  # ever runs — and `tools/cfctl.ts` because it is the sweep itself.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cross-repo.yml'
+      - '.github/workflows/service-ci.yml'
+      - '.github/workflows/web-ci.yml'
+      - 'tools/cfctl.ts'
+      - 'tools/registry.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/cross-repo.yml'
+      - '.github/workflows/service-ci.yml'
+      - '.github/workflows/web-ci.yml'
+      - 'tools/cfctl.ts'
+      - 'tools/registry.ts'
+
+# Per upstream, not global. Two merges in one repository ask the same question of the same readers
+# and the later answer is the true one; two merges in DIFFERENT repositories ask different
+# questions, and serialising them behind one group would delay the answer for the very reason this
+# file exists. `cancel-in-progress` is off for the same reason it is off in estate-ci.yml: a
+# cancelled sweep is an unanswered question, not a green one.
+concurrency:
+  group: cross-repo-${{ github.event.client_payload.repo || github.event.inputs.repo || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cross:
+    name: The repositories that read one that moved still agree with it
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # For the issue that gives a red an owner. A run without it warns and stays red rather than
+      # silently filing nothing.
+      issues: write
+    env:
+      OWNER: cloudsforge-online
+      ESTATE: ${{ github.workspace }}/estate
+      # Below the 55 `micro-*` repositories that exist and far above any accidental subset — the
+      # same floor, for the same reason, as estate-ci.yml's: a token that can see two repositories
+      # must fail here, naming the cause, rather than downstream as "nothing reads wallet".
+      MIN_REPOS: 45
+      # THE ANTI-VACUITY RATCHET. The estate had 12 cross-repository checks in 6 repositories on
+      # 2026-08-10 (`cfctl cross --list`). A sweep that finds fewer than this has not proved the
+      # estate agrees with itself; it has proved that the clone is partial or that the edge
+      # detection stopped matching — and both of those print the same clean report as a healthy
+      # estate, which is the exact defect this file exists to remove. It is a FLOOR, not an
+      # equality: adding a check must not turn this red, losing four of them must.
+      MIN_CHECKS: 10
+      # Never interpolated into a shell. `${{ }}` inside a `run:` block is textual substitution
+      # before bash sees it, and this value arrives in an HTTP request body from another
+      # repository's workflow.
+      UPSTREAM: ${{ github.event.client_payload.repo || github.event.inputs.repo || '' }}
+      MERGED_SHA: ${{ github.event.client_payload.sha || '' }}
+      MERGED_BY: ${{ github.event.client_payload.actor || '' }}
+      MERGED_RUN: ${{ github.event.client_payload.run || '' }}
+
+    steps:
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE SWEEP AT THE REVISION UNDER TEST, checked out as `estate/org` and not as `micro-org`.
+      #
+      # The name is load-bearing twice over. `cfctl` resolves every repository as a sibling named by
+      # its REGISTRY name — `microRoot()` is the checkout's parent — so the tool must sit inside the
+      # estate directory it is about to read, under the name the registry gives it. And micro-org is
+      # itself a reader (`test/cross-repo.test.ts`), so a checkout under any other name would drop
+      # the one check that proves this sweep can go red.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+        with: { path: estate/org }
+
+      # A `repository_dispatch` body is written by whoever holds a token, and every field of it
+      # arrives here as text. Two of these fields become a DIRECTORY (`estate/<repo>`) and a
+      # `git fetch` argument, so they are checked against their shapes before anything uses them:
+      # a repository name is what the registry's names look like, and a commit is forty hex
+      # characters. Refusing loudly beats sanitising, because a payload that does not fit either
+      # shape is not a merge this workflow can be about.
+      - name: Read what this run was asked, and refuse a payload that is not one
+        run: |
+          set -euo pipefail
+          if [ -n "$UPSTREAM" ] && ! printf '%s' "$UPSTREAM" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'; then
+            echo "::error::'${UPSTREAM}' is not the shape of a repository name"
+            exit 1
+          fi
+          if [ -n "$MERGED_SHA" ] && ! printf '%s' "$MERGED_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::'${MERGED_SHA}' is not the shape of a commit"
+            exit 1
+          fi
+          if [ -n "$UPSTREAM" ]; then
+            echo "asked about ${UPSTREAM}${MERGED_SHA:+ at ${MERGED_SHA}}${MERGED_BY:+, merged by ${MERGED_BY}}"
+            echo "${MERGED_RUN:+the upstream run: ${MERGED_RUN}}"
+          else
+            echo "no upstream named — sweeping every cross-repository check in the estate"
+          fi
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # The estate, derived and cloned, in the layout `cfctl` and a developer's own working tree
+      # both use: directories named WITHOUT the `micro-` prefix, beside each other.
+      #
+      # THE LIST IS NOT WRITTEN DOWN, for estate-ci.yml's reason: a hand-kept list of repositories
+      # is a list that is wrong the day a repository is added, and the repository it is missing is
+      # the one nothing is checking. micro-org is skipped because the checkout above already put it
+      # there, at THIS run's ref rather than at main — a sweep graded by main's copy of itself
+      # cannot test its own change.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Clone the estate
+        env:
+          GH_TOKEN: ${{ secrets.ESTATE_READ_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::no estate token, so this sweep can see one repository and would certify the estate from it"
+            echo "Set ESTATE_READ_TOKEN on this repository — contents:read on every micro-* repository."
+            exit 1
+          fi
+
+          repos=$(gh api --paginate "orgs/${OWNER}/repos?per_page=100" \
+                    --jq '.[] | select(.archived == false) | select(.name | startswith("micro-")) | .name' || true)
+          printf '%s\n' "$repos" | sed '/^$/d' | grep -v '^micro-org$' > "$RUNNER_TEMP/repos.txt" || true
+          listed=$(grep -c . "$RUNNER_TEMP/repos.txt" || true)
+          listed=${listed:-0}
+          echo "the organisation lists ${listed} unarchived micro-* repositories beside this one"
+          if [ "$listed" -lt "$MIN_REPOS" ]; then
+            echo "::error::only ${listed} repositories listed, expected at least ${MIN_REPOS}"
+            echo "The token cannot see the organisation, and a sweep of what it CAN see reports agreement"
+            echo "it never checked."
+            exit 1
+          fi
+
+          git config --global "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" https://github.com/
+
+          clone_one() {
+            name="$1"
+            dir="${ESTATE}/${name#micro-}"
+            if git clone --depth 1 --single-branch --quiet "https://github.com/${OWNER}/${name}.git" "$dir" \
+                 2>"${RUNNER_TEMP}/${name}.err"; then
+              echo "ok       ${name}"
+            else
+              echo "FAILED   ${name}"
+              sed 's/^/             /' "${RUNNER_TEMP}/${name}.err"
+            fi
+          }
+          export -f clone_one
+          export ESTATE OWNER RUNNER_TEMP
+          xargs -P 8 -I {} bash -c 'clone_one "$@"' _ {} < "$RUNNER_TEMP/repos.txt" \
+            | sort | tee "$RUNNER_TEMP/clone.log"
+
+          # A clone that failed is FATAL, never skipped: this sweep cannot tell "that repository
+          # holds no cross-repository check" from "that repository was not there", and the second
+          # one silently subtracts from the denominator of every green result it prints.
+          failures=$(grep '^FAILED' "$RUNNER_TEMP/clone.log" || true)
+          if [ -n "$failures" ]; then
+            echo "::error::a repository in the estate could not be cloned, so the sweep would be partial"
+            printf '%s\n' "$failures"
+            exit 1
+          fi
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE UPSTREAM AT THE COMMIT THAT WAS MERGED, not at whatever main is now.
+      #
+      # The clone above takes main's tip, and by the time a dispatch is picked up main may already
+      # have moved. Grading a merge against a later commit is how a sweep reports a disagreement
+      # somebody else has since fixed, or misses one somebody else has since introduced — either
+      # way the verdict belongs to a commit nobody asked about. `--depth 1` cannot fetch an
+      # arbitrary sha, so this is a second, targeted fetch rather than a deeper clone of 55.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Wind the upstream back to the commit that was merged
+        if: env.UPSTREAM != '' && env.MERGED_SHA != ''
+        run: |
+          set -uo pipefail
+          dir="${ESTATE}/${UPSTREAM}"
+          [ -d "$dir" ] || { echo "::error::${UPSTREAM} is not a repository in this estate"; exit 1; }
+          if git -C "$dir" fetch --depth 1 origin "$MERGED_SHA" 2>/dev/null && git -C "$dir" checkout -q FETCH_HEAD; then
+            echo "ok: ${UPSTREAM} is at ${MERGED_SHA}"
+          else
+            # Not fatal, and it must not be. A dispatch can outlive a force-push or a deleted
+            # commit, and refusing to sweep at all in that case would mean the estate stops being
+            # checked precisely when its history has been rewritten. The verdict is still about a
+            # real commit — it just says which one.
+            echo "::warning::${MERGED_SHA} could not be fetched from ${UPSTREAM}; sweeping its main tip instead"
+            echo "$(git -C "$dir" rev-parse HEAD) is what will be read"
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # Pinned for the same reason service-ci.yml pins it: there is no package.json in the
+          # working directory for pnpm/action-setup to read a packageManager field out of.
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: estate/org/pnpm-lock.yaml
+      - name: Install the sweep
+        working-directory: estate/org
+        run: pnpm install --frozen-lockfile
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # WHO READS THE REPOSITORY THAT MOVED — derived from the estate on disk, every run, and read
+      # here as data rather than as the padded table `cfctl cross --list` prints for a person.
+      #
+      # NOT A MATRIX IN A FILE, and that is the whole reason this works. Measured 2026-08-09: four
+      # files in the estate carry an explicit `repo: 'micro-*'` edge table, 71 test files mention a
+      # sibling checkout and 30 read one. A dispatch matrix built from the four would have covered a
+      # twentieth of the surface WHILE LOOKING COMPLETE — the same green tick that means nothing was
+      # asked. Deriving them found `notify/src/catalogue.test.ts` reading
+      # `identity/src/emailVerification.ts`, an edge written down nowhere.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Who reads it
+        working-directory: estate/org
+        run: |
+          set -uo pipefail
+          # `|| status=$?` and not a bare call: GitHub runs this block as `bash -e`, which no
+          # `set` line here turns off, so an unguarded failure would kill the step before the
+          # diagnosis below could name what went wrong.
+          status=0
+          if [ -n "$UPSTREAM" ]; then
+            node --import tsx tools/cfctl.ts cross --json --repo "$UPSTREAM" > "$RUNNER_TEMP/edges.json" || status=$?
+          else
+            node --import tsx tools/cfctl.ts cross --json > "$RUNNER_TEMP/edges.json" || status=$?
+          fi
+          cat "$RUNNER_TEMP/edges.json"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the edge scan refused — an unregistered repository name, or a working tree it could not read"
+            exit 1
+          fi
+
+          total=$(jq -r '.total' "$RUNNER_TEMP/edges.json")
+          if [ "$total" -lt "$MIN_CHECKS" ]; then
+            echo "::error::${total} cross-repository checks found in the whole estate, expected at least ${MIN_CHECKS}"
+            echo "That is a broken sweep, not a clean estate: either the clone is partial or the edge"
+            echo "detection in siblingReads() has stopped matching. A sweep that finds nothing reports"
+            echo "the same green as an estate that agrees, which is the defect this workflow exists for."
+            exit 1
+          fi
+          echo "ok: ${total} cross-repository check(s) in the estate"
+
+          jq -r '.readers[].repo' "$RUNNER_TEMP/edges.json" > "$RUNNER_TEMP/readers.txt"
+          echo "readers to prepare: $(tr '\n' ' ' < "$RUNNER_TEMP/readers.txt")"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE READERS' DEPENDENCIES, AND THEIR SIBLINGS' FIRST.
+      #
+      # A cross-repository check is a test in the reader's own suite, run by the reader's own
+      # runner — one frontend needs `--import @cloudsforge/ui/test-loader` for its DOM shims, one
+      # service runs `--test-concurrency=1`. So the reader has to be installed, and @cloudsforge/*
+      # is resolved by `link:` to a sibling rather than from a registry: `link:` is a symlink to a
+      # path, and it resolves to the SIBLING'S OWN node_modules, which must therefore already
+      # exist. web-ci.yml learned this the expensive way — thirteen frontends kept a bespoke CI
+      # file because the reusable one installed the app without its design system and every
+      # @cloudsforge/ui import then resolved to nothing.
+      #
+      # An install that fails is FATAL rather than skipped, for the reason the checks themselves
+      # fail rather than skip: a reader whose suite never started is not a reader that agrees.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: Install the readers
+        run: |
+          set -uo pipefail
+          [ -s "$RUNNER_TEMP/readers.txt" ] || { echo "nothing reads it — no installs"; exit 0; }
+
+          # The sibling ROOTS a package.json resolves through `link:`, as directory names beside the
+          # estate: `link:../ui/packages/ui` is the `ui` workspace, whose own install is what
+          # creates the node_modules the symlink points into.
+          siblings_of() {
+            node -e '
+              const fs = require("node:fs");
+              const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              const specs = Object.values({ ...manifest.dependencies, ...manifest.devDependencies });
+              const roots = new Set();
+              for (const spec of specs) {
+                const match = /^link:\.\.\/([^/]+)/.exec(String(spec));
+                if (match) roots.add(match[1]);
+              }
+              process.stdout.write([...roots].join("\n"));
+            ' "$1"
+          }
+
+          failed=0
+          while read -r reader; do
+            [ -n "$reader" ] || continue
+            dir="${ESTATE}/${reader}"
+            for sibling in $(siblings_of "${dir}/package.json" || true); do
+              [ -f "${ESTATE}/${sibling}/pnpm-lock.yaml" ] || continue
+              echo "── ${reader} ← ${sibling}"
+              pnpm --dir "${ESTATE}/${sibling}" install --frozen-lockfile || failed=1
+            done
+            echo "── ${reader}"
+            pnpm --dir "$dir" install --frozen-lockfile || failed=1
+          done < "$RUNNER_TEMP/readers.txt"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::a reader could not be installed, so its cross-repository checks could not run"
+            echo "A check that did not start is not a check that passed."
+            exit 1
+          fi
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE SWEEP. `--repo` narrows it to the checks that read the repository that moved: running
+      # the rest would attribute an unrelated failure to this merge, which is the release cut's
+      # mistake in miniature — a red tick whose cause is somewhere else.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: The readers still agree with what merged
+        id: sweep
+        working-directory: estate/org
+        run: |
+          set -uo pipefail
+          if [ -n "$UPSTREAM" ]; then
+            node --import tsx tools/cfctl.ts cross --repo "$UPSTREAM" 2>&1 | tee "$RUNNER_TEMP/sweep.txt"
+          else
+            node --import tsx tools/cfctl.ts cross 2>&1 | tee "$RUNNER_TEMP/sweep.txt"
+          fi
+          exit "${PIPESTATUS[0]}"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      # The issue, on estate-ci.yml's pattern and for its reason: a red that belongs to nobody is
+      # wallpaper. Not on a pull request — a pull request's red is already attached to the person
+      # who can fix it, and filing an issue for it would file one per push.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: File the disagreement against the merge that caused it
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          subject="${UPSTREAM:-the estate}"
+          {
+            echo "A repository that reads \`${subject}\` no longer agrees with it: <${RUN_URL}>"
+            echo
+            if [ -n "$MERGED_SHA" ]; then
+              echo "| | |"
+              echo "|---|---|"
+              echo "| merged in | \`${UPSTREAM}\` |"
+              echo "| commit | \`${MERGED_SHA}\` |"
+              echo "| by | ${MERGED_BY:-unknown} |"
+              echo "| its run | ${MERGED_RUN:-unknown} |"
+              echo
+            fi
+            echo "These checks open a sibling checkout and assert the two repositories agree. They run in"
+            echo "the repository that HOLDS them, so nothing ran them when \`${subject}\` moved — that is"
+            echo "micro-org#304, and this issue is the trigger it asked for."
+            echo
+            echo "**The check is not the thing to relax.** It fails rather than skips on purpose: a check"
+            echo "that turns itself off when its inputs move produces the same green tick as one that ran,"
+            echo "in the repository that did not move, which is the half nobody looks at."
+            echo
+            echo '```'
+            tail -c 30000 "$RUNNER_TEMP/sweep.txt" 2>/dev/null || echo "(no report — the run did not get that far)"
+            echo '```'
+          } > "$RUNNER_TEMP/issue.md"
+
+          gh label create estate-invariant --repo "$REPO" --color B60205 \
+            --description "An invariant that spans repositories, so no single repository's CI can see it" \
+            --force > /dev/null 2>&1 || true
+
+          title="cross-repo: a reader of ${subject} disagrees with it"
+          open=$(gh issue list --repo "$REPO" --state open --label estate-invariant --search "$title in:title" \
+                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$REPO" --body-file "$RUNNER_TEMP/issue.md" \
+              || echo "::warning::could not comment on issue #${open} — is issues:write granted?"
+            echo "updated issue #${open}"
+          else
+            gh issue create --repo "$REPO" --label estate-invariant --title "$title" \
+              --body-file "$RUNNER_TEMP/issue.md" \
+              || echo "::warning::could not open an issue — is issues:write granted?"
+          fi
+
+      - name: Close it when they agree again
+        if: success() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # By title, so a green sweep of `wallet` does not close the open disagreement about
+          # `contracts`. The label alone is shared with estate-ci.yml's nightly issue, and closing
+          # that one from here would announce that an invariant this job never looked at is fixed.
+          title="cross-repo: a reader of ${UPSTREAM:-the estate} disagrees with it"
+          open=$(gh issue list --repo "$REPO" --state open --label estate-invariant --search "$title in:title" \
+                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          [ -n "$open" ] || { echo "ok: nothing open for ${UPSTREAM:-the estate}"; exit 0; }
+          gh issue close "$open" --repo "$REPO" \
+            --comment "The readers agree again: <${RUN_URL}>" \
+            || echo "::warning::could not close issue #${open}"

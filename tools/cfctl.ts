@@ -6,6 +6,8 @@
 //   cfctl doctor                   the checks for the things that actually break
 //   cfctl cross [--repo <name>]    run the checks that read a sibling repository — 'who breaks
 //                                  if I merge here', asked before the merge instead of after
+//   cfctl cross --json             the same edges as data, for the workflow that runs the sweep
+//                                  when an upstream merges (.github/workflows/cross-repo.yml)
 //   cfctl bump <version>           move every deployable to one version on a release/<v> branch
 //   cfctl release <version>        generate releases/<version>.yaml, one image per service
 //   cfctl release --verify <v>     check every image exists and is still the image that was pinned
@@ -988,10 +990,18 @@ function cmdDoctor(args: Args): number {
 // no registry row names. So the vocabulary is complete by construction: a repository this
 // function could not name is a repository doctor is already shouting about.
 //
-// WHAT THIS DELIBERATELY DOES NOT DO: run on the upstream merge. That needs a `repository_dispatch`
-// sender in each upstream repository and a receiver in each downstream one, and measured
-// 2026-08-10 there is not one of either anywhere — `repository_dispatch` appears in zero of the
-// 69 repositories with CI. Those workflow files live in the service repositories, not in this one.
+// WHAT RUNS THIS ON THE UPSTREAM MERGE, since 2026-08-10: `.github/workflows/cross-repo.yml` in
+// this repository. Every repository that calls `service-ci.yml` or `web-ci.yml` sends one
+// `repository_dispatch` from its main build — the sender is a step of those reusable workflows, so
+// it cost no per-repository file — and micro-org answers it by running this command with `--repo`
+// set to the repository that moved.
+//
+// THE RECEIVER COULD NOT LIVE IN THE DOWNSTREAM REPOSITORIES, which is what the issue first
+// proposed. A reusable workflow declares `on: workflow_call` and nothing else; the trigger belongs
+// to the CALLER's file, so "a receiver in service-ci.yml" would have been fifty-five per-repository
+// edits wearing one file's name. The sweep therefore runs where the whole estate is already
+// checked out, and — like `estate-ci.yml`, for the reason written at the top of that file — its
+// red lands in micro-org and blocks nothing in the repository that merged.
 
 // WHY THIS READS THROUGH THE COMMENT BLANKER. The first run of this sweep, 2026-08-10, claimed
 // eleven edges out of `notify/src/catalogue.test.ts` and flagged sixty service test files as
@@ -1197,6 +1207,51 @@ function cmdCross(args: Args): number {
   }
 
   const total = scans.reduce((sum, scan) => sum + scan.files.length, 0);
+
+  // WHY THIS COMMAND HAS A MACHINE-READABLE MODE, when the table above is what a person reads.
+  //
+  // The trigger for micro-org#304 is a workflow, and the workflow has to do something this command
+  // does not: INSTALL each reader's dependencies before its suite can run at all. A CI runner has
+  // no node_modules anywhere, and a reader resolves @cloudsforge/* through `link:` to a sibling
+  // that must be installed first — so the sweep has to be told which repositories to prepare, in
+  // a shape a shell can consume, BEFORE it runs anything.
+  //
+  // The alternative was for the workflow to parse the padded table with awk. That is the estate's
+  // recurring defect one layer down: a column layout is prose, and the run that changes it turns
+  // "which repositories read wallet" into an empty list, which reads downstream as an estate that
+  // agrees. Printed as data, a shape change is a `jq` failure rather than a silent green.
+  //
+  // Like `--list`, this RUNS NOTHING: it answers who reads whom, not whether they still agree.
+  if (args.flag('json')) {
+    const readers = scans
+      .filter((scan) => scan.files.some((file) => only === undefined || file.reads.includes(only)))
+      .map((scan) => {
+        // Narrowed by `--repo`, both halves. A `reads` union taken over the reader's WHOLE scan
+        // would name repositories the selected files do not read, and the caller is deciding what
+        // to prepare and run from this — so it would prepare and blame the wrong ones.
+        const files = scan.files.filter((file) => only === undefined || file.reads.includes(only));
+        return {
+          repo: scan.repo,
+          files: files.map((file) => file.file),
+          reads: [...new Set(files.flatMap((file) => file.reads))].sort(),
+        };
+      });
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          // The estate-wide total, NOT the narrowed one, because it is the anti-vacuity floor: a
+          // caller asking about one repository still needs to know the detector is matching at all.
+          total,
+          repo: only ?? null,
+          readers,
+          unclassified: scans.reduce((sum, scan) => sum + scan.unclassified.length, 0),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return total === 0 ? 1 : 0;
+  }
 
   // Anti-vacuity, on micro-org#38's rule: a sweep that finds nothing has not proved the estate
   // agrees with itself, it has proved the sweep is broken. The estate had 30 such files on
@@ -2011,7 +2066,7 @@ const USAGE = `cfctl — CloudsForge organisation machinery (AD-03)
   cfctl clone [--only a,b] [--kind <kind>] [--dry-run]
   cfctl pull  [--only a,b] [--kind <kind>]
   cfctl doctor [--online] [--strict]
-  cfctl cross [--list] [--unclassified] [--repo <name>]
+  cfctl cross [--list] [--json] [--unclassified] [--repo <name>]
   cfctl bump <version> [--only a,b] [--notes <file>] [--any-branch] [--push]
   cfctl release <version> [--force]
   cfctl release --verify <version>
