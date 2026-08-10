@@ -444,6 +444,25 @@ describe('the merge trigger', () => {
     assert.match(RECEIVER, /::error::a reader could not be installed/);
   });
 
+  // estate-ci.yml's rule, applied to the workflow that borrowed the rest of its shape: the tests
+  // above pin that `cfctl cross` goes red, and NONE of them pin that the job does. Between the two
+  // sit an install, a `tee` and an exit code — plumbing that is wrong once and silent forever,
+  // reporting the tick of an estate that agrees. The canary plants the #304 scenario in a scratch
+  // directory and requires the red, graded on what it NAMES: a partial clone, a missing tsx and a
+  // renamed subcommand all exit non-zero too.
+  it('the receiver carries a canary, graded on more than an exit code', () => {
+    assert.match(RECEIVER, /- name: The canary — a reader that disagrees really does turn this job red/);
+    assert.match(RECEIVER, /the sweep stayed GREEN with a downstream that reads an asset the upstream dropped/);
+    assert.match(RECEIVER, /grep -q 'canary: wallet no longer moves LTC'/, 'the red must be attributed to the planted disagreement');
+    assert.match(RECEIVER, /the canary fixture was not written/, 'this estate has graded an unchanged file before');
+    assert.match(RECEIVER, /the canary survived into the estate checkout/, 'and it must be proven out of the real sweep');
+    // Before the sweep, or it grades a run that has already reported.
+    assert.ok(
+      RECEIVER.indexOf('- name: The canary') < RECEIVER.indexOf('- name: The readers still agree with what merged'),
+      'the canary must run before the sweep it vouches for',
+    );
+  });
+
   it('the receiver still runs when no upstream ever dispatches', () => {
     // The dispatch needs a token with write access to micro-org. A mechanism whose whole value
     // waits on a credential nobody has granted is a mechanism that reports success and does

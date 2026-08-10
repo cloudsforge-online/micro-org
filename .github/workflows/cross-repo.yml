@@ -376,6 +376,81 @@ jobs:
           fi
 
       # ────────────────────────────────────────────────────────────────────────────────────────────
+      # THE CANARY — this job can still go red.
+      #
+      # Everything above this line makes the sweep GREENER: a narrower --repo, an install that must
+      # succeed, an edge list derived from a clone. Each is a way for the run to stop measuring and
+      # report the same green tick as an estate that agrees, which is micro-org#304 one layer up.
+      # test/cross-repo.test.ts pins that `cfctl cross` goes red; nothing pinned that THIS JOB
+      # turns red when it does, and the exit code of a `tee`d pipeline is exactly the kind of
+      # plumbing that is wrong once and silent forever.
+      #
+      # So: two repositories in a scratch directory, one reading the other, disagreeing on purpose —
+      # the #304 scenario in miniature, the same fixture as the unit test. It is built in
+      # RUNNER_TEMP rather than injected into the estate checkout, so there is no state to undo,
+      # and the step below proves the real estate never saw it anyway.
+      #
+      # Graded on WHAT THE RED NAMES, not on a non-zero exit: a partial clone, a missing tsx and a
+      # renamed subcommand all exit non-zero too, and a canary that accepts any red accepts every
+      # way this job can stop looking at the estate.
+      # ────────────────────────────────────────────────────────────────────────────────────────────
+      - name: The canary — a reader that disagrees really does turn this job red
+        working-directory: estate/org
+        run: |
+          set -uo pipefail
+          fixture="${RUNNER_TEMP}/canary-estate"
+          rm -rf "$fixture"
+          mkdir -p "${fixture}/wallet/src" "${fixture}/hub-web/test"
+
+          # The upstream decides something, and has just dropped an asset. A correct, green,
+          # upstream-only change — the whole point being that the downstream does not move.
+          echo "export const ASSET_FOR_CHAIN = { BTC: 'bitcoin' }" > "${fixture}/wallet/src/addresses.ts"
+          echo '{"name":"hub-web","scripts":{"test":"node --test test/*.test.js"}}' > "${fixture}/hub-web/package.json"
+          # Plain JavaScript, node builtins only: the fixture needs no install, and what is under
+          # test here is this job's plumbing rather than tsx.
+          cat > "${fixture}/hub-web/test/canary-assets.test.js" <<'CANARY'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          import { fileURLToPath } from 'node:url'
+          import test from 'node:test'
+          const ESTATE = fileURLToPath(new URL('../..', import.meta.url))
+          test('the menu offers what wallet will move', () => {
+            const source = readFileSync(`${ESTATE}wallet/src/addresses.ts`, 'utf8')
+            assert.ok(source.includes('LTC'), 'canary: wallet no longer moves LTC')
+          })
+          CANARY
+
+          # This estate has graded an unchanged file before, and called it a pass.
+          if ! [ -s "${fixture}/hub-web/test/canary-assets.test.js" ]; then
+            echo "::error::the canary fixture was not written, so the red below would mean nothing"
+            exit 1
+          fi
+
+          status=0
+          CLOUDSFORGE_MICRO_ROOT="$fixture" node --import tsx tools/cfctl.ts cross --repo wallet \
+            > "${RUNNER_TEMP}/canary.txt" 2>&1 || status=$?
+          cat "${RUNNER_TEMP}/canary.txt"
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the sweep stayed GREEN with a downstream that reads an asset the upstream dropped"
+            echo "That is the defect this workflow exists for, reproduced against the workflow itself."
+            exit 1
+          fi
+          if ! grep -q 'FAIL' "${RUNNER_TEMP}/canary.txt" \
+            || ! grep -q 'hub-web' "${RUNNER_TEMP}/canary.txt" \
+            || ! grep -q 'canary: wallet no longer moves LTC' "${RUNNER_TEMP}/canary.txt"; then
+            echo "::error::the canary went red for some reason other than the disagreement it planted"
+            exit 1
+          fi
+
+          # Proven gone: the fixture is a scratch directory, and the sweep below walks the estate.
+          if [ -e "${ESTATE}/hub-web/test/canary-assets.test.js" ]; then
+            echo "::error::the canary survived into the estate checkout and would be swept as a real edge"
+            exit 1
+          fi
+          echo "ok: a disagreeing reader turns this job red, and the red names the reader and the assertion"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────────
       # THE SWEEP. `--repo` narrows it to the checks that read the repository that moved: running
       # the rest would attribute an unrelated failure to this merge, which is the release cut's
       # mistake in miniature — a red tick whose cause is somewhere else.
