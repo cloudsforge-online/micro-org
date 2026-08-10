@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   compareDotted,
   digestVerdict,
+  distributionVerdict,
   ghcrPath,
   inspect,
   isOrgRemote,
@@ -15,6 +16,8 @@ import {
   readGhcrTokenAnswer,
   parseManifest,
   portFor,
+  publishesAnArtifact,
+  readGithubReleases,
   renderManifest,
   rewriteVersionText,
   satisfies,
@@ -24,6 +27,7 @@ import {
 import {
   ALLOWED_SCOPED_PACKAGES,
   REGISTRY,
+  clientRepos,
   deployableRepos,
   imageFor,
   managedRepos,
@@ -69,19 +73,38 @@ test('the registry holds every repository in the organisation, and every directo
   // not name them, and nothing could report the gap: `cfctl release --verify` checks images for
   // the repositories the registry lists, so a surface it does not know about cannot be reported
   // missing. A row that exists before the deploy makes the missing image the loud case.
-  assert.equal(REGISTRY.length, 73);
+  //
+  // 78 since 2026-08-10: the five wallet-client repositories of 25-wallet-clients.md §9
+  // (micro-org#352). All five had been checked out beside the estate since 2026-08-06 and were
+  // named by no row, which `cfctl doctor` reported as five permanent FAILs — measured five before
+  // this change and zero after. Five failures that are always there are five nobody reads, and a
+  // sixth real one would have arrived indistinguishable from them.
+  //
+  // They are THREE kinds, not one, and the counts below are where that is asserted rather than
+  // left to prose: `hearth-wallet-core` publishes a package so it is a fifth `library`;
+  // `wallet-assets` has no package.json and a MANIFEST.json so it is a fifth `assets`; and the
+  // three shells are `client`, a kind added in the same change because no existing one fits them
+  // without claiming something false. All five are `deployable: false`, so `DERIVED_PORT_ORDER`
+  // below is UNCHANGED — the measurement that let this block be filed tidily by kind rather than
+  // appended the way `pool`/`pool-web` and the two consoles had to be.
+  assert.equal(REGISTRY.length, 78);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
   assert.equal(counts.get('service'), 27, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera and the mining pool');
   assert.equal(counts.get('web'), 18, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles and the pool console');
   assert.equal(counts.get('ops'), 3, '3 operations services');
-  assert.equal(counts.get('library'), 4, '4 library repositories');
-  assert.equal(counts.get('assets'), 4, 'brand and the three per-title asset repositories');
+  assert.equal(counts.get('library'), 5, '4 library repositories, plus the wallet core that publishes @cloudsforge/hearth-wallet-core');
+  assert.equal(counts.get('assets'), 5, 'brand, the three per-title asset repositories and the wallet art');
+  assert.equal(counts.get('client'), 3, 'desktop, extension and mobile — builds a user installs, not services the estate runs');
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 62);
-  assert.equal(deployableRepos().length, 48, 'services, frontends and operations services');
+  assert.equal(managedRepos().length, 67);
+  assert.equal(
+    deployableRepos().length,
+    48,
+    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind',
+  );
 });
 
 test('names are unique — a duplicate would make one entry unreachable', () => {
@@ -224,6 +247,13 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   // them, both already pinned in micro-deploy's compose. Appended, this list grows and does not
   // shift, which is the only kind of registry edit that costs nothing.
   'pool', 'pool-web',
+  // NOTHING FOR THE FIVE WALLET ROWS OF 2026-08-10, and that absence is a measurement rather than
+  // an omission (micro-org#352). `pool`, `pool-web`, `lantern-web` and `beacon-web` all had to be
+  // appended because they are deployable, and position in `deployableRepos()` IS the port. The
+  // five wallet rows are `deployable: false` — `client()` fixes that in the constructor rather
+  // than taking it as an argument — so `deployableRepos()` never sees them and they could be
+  // filed where they belong, beside the other libraries and asset repositories and in a block of
+  // their own. Measured before and after: 48 deployables both times, and this list unchanged.
 ];
 
 /**
@@ -608,6 +638,188 @@ test('only a GHCR reference yields a package path to ask about', () => {
   // separate argument, and pasting one in here would ask GHCR for `micro-ledger:2.5.7:2.5.7`.
   assert.equal(ghcrPath('ghcr.io/cloudsforge-online/micro-ledger:2.5.7'), undefined);
   assert.equal(ghcrPath(`ghcr.io/cloudsforge-online/micro-ledger@${LEDGER_DIGEST}`), undefined);
+});
+
+// -- the clients, which a release manifest cannot name (micro-org#352) --------------------------
+
+test('a client consumes no derived port, because a client is not deployed', () => {
+  // The registry's own rule, asserted rather than trusted: `portFor` counts position in
+  // `deployableRepos()`, so a `client` row that leaked into that list would both take a host port
+  // from a service that already has one and put `ghcr.io/cloudsforge-online/micro-wallet-desktop`
+  // into the next release manifest — an image that has never been built and never will be.
+  // 25-wallet-clients.md §10.2: "they are not in the registry's deployable set, and they consume
+  // no port from the derived block".
+  const deployable = new Set(deployableRepos().map((repo) => repo.name));
+  assert.equal(clientRepos().length, 3);
+  for (const client of clientRepos()) {
+    assert.equal(client.deployable, false, `${client.name} is deployable`);
+    assert.ok(!deployable.has(client.name), `${client.name} reached the deployable set`);
+  }
+});
+
+test('every client records what is in front of users, with a date and a reason', () => {
+  // THE POINT OF THE WHOLE RECORD. A release manifest answers "which artifact, built from which
+  // commit, is in front of users" for 48 container images. None of these three is a container
+  // image, so before this row existed the estate's one mechanism for that question could say
+  // nothing at all about them — not shipped, not unshipped, not at what version. This asserts the
+  // record can still answer it: a state, a date it has been true since, and either an artifact or
+  // the reasons there is not one.
+  // The clock, not a date written here. A hardcoded "today" would either age into a trap — the
+  // next client to be recorded gets a date this test calls the future — or be updated by whoever
+  // it inconveniences, which is the same thing more slowly. `since` in the past is a property of
+  // the record, not of the day the suite runs.
+  const today = new Date();
+  for (const client of clientRepos()) {
+    const record = client.distribution;
+    assert.match(record.since, /^\d{4}-\d{2}-\d{2}$/, `${client.name}: since is not a date`);
+    const since = new Date(`${record.since}T00:00:00Z`);
+    assert.ok(!Number.isNaN(since.getTime()), `${client.name}: since does not parse`);
+    // A date in the future is how "recorded on the day it became true" turns into a placeholder.
+    assert.ok(since <= today, `${client.name}: recorded as true since a date that has not happened`);
+    if (record.state === 'none') {
+      // "Not distributed" with no reason is indistinguishable from nobody having got round to it,
+      // and the difference is the entire claim this makes: DELIBERATELY not distributed. Each
+      // blocker is also the owner's decision rather than this tool's — a store listing, a signing
+      // key, a developer account — so naming them is what keeps that boundary visible.
+      assert.ok(record.blockedOn.length > 0, `${client.name}: not distributed, and no reason given`);
+      for (const blocker of record.blockedOn) {
+        assert.ok(blocker.trim().length > 10, `${client.name}: '${blocker}' does not say anything`);
+      }
+    } else {
+      for (const [field, value] of Object.entries(record)) {
+        assert.ok(String(value).trim() !== '', `${client.name}: ${field} is empty in a shipped record`);
+      }
+    }
+  }
+});
+
+// Four real answers from api.github.com, captured 2026-08-10 rather than written by hand. The
+// first is what `micro-wallet-desktop` returns today — the state this whole record describes; the
+// second is the body GitHub serves for a repository the caller cannot see, verbatim including the
+// documentation_url; the third and fourth are real release entries from tauri-apps/tauri and
+// electron/electron, the second of which is a prerelease. A check whose only test is the internet
+// is a check that is silently wrong between outages.
+const RELEASES_EMPTY = '[\n\n]\n';
+const RELEASES_NOT_FOUND =
+  '{\n  "message": "Not Found",\n' +
+  '  "documentation_url": "https://docs.github.com/rest/releases/releases#list-releases",\n' +
+  '  "status": "404"\n}\n';
+const RELEASES_REAL =
+  '[{"tag_name":"tauri-v2.11.5","name":"tauri v2.11.5","draft":false,"prerelease":false},' +
+  '{"tag_name":"tauri-v2.11.4","name":"tauri v2.11.4","draft":false,"prerelease":false}]';
+const RELEASES_PRERELEASE = '[{"tag_name":"v44.0.0-beta.2","draft":false,"prerelease":true}]';
+
+test('an empty release list is zero releases; a refusal is not', () => {
+  // THE ONE THING THIS MUST NOT DO. `[]` means the repository has published nothing, which is a
+  // finding. `{"message":"Not Found"}` is what the API returns for any repository the caller
+  // cannot see — every private one, asked anonymously — and a reader that counted its way to zero
+  // would report a private, shipping client as undistributed. That is the exact failure this
+  // command exists to catch, arriving through the check meant to catch it. Same lesson as GHCR's
+  // DENIED, one screen up in cfctl.ts.
+  assert.deepEqual(readGithubReleases(RELEASES_EMPTY).tags, []);
+  assert.equal(readGithubReleases(RELEASES_NOT_FOUND).tags, undefined);
+  assert.match(readGithubReleases(RELEASES_NOT_FOUND).reason ?? '', /Not Found/);
+  assert.deepEqual(readGithubReleases(RELEASES_REAL).tags, ['tauri-v2.11.5', 'tauri-v2.11.4']);
+  // A prerelease is public and downloadable by anybody with the link, so it is an artifact in
+  // front of users and counts. A draft is visible only to maintainers and does not.
+  assert.deepEqual(readGithubReleases(RELEASES_PRERELEASE).tags, ['v44.0.0-beta.2']);
+  assert.deepEqual(
+    readGithubReleases('[{"tag_name":"v1.0.0","draft":true},{"tag_name":"v0.9.0","draft":false}]').tags,
+    ['v0.9.0'],
+  );
+  // Nothing that is not a list of nameable releases is allowed to read as a count.
+  assert.equal(readGithubReleases('<html>502 Bad Gateway</html>').tags, undefined);
+  assert.equal(readGithubReleases('{}').tags, undefined);
+  assert.equal(readGithubReleases('[{"name":"no tag here"}]').tags, undefined);
+});
+
+test('a client that is distributed while the registry says it is not is the loud case', () => {
+  const notShipped = { state: 'none', since: '2026-08-10', blockedOn: ['a signing key'] } as const;
+  const shipped = {
+    state: 'distributed',
+    since: '2026-09-01',
+    channel: 'GitHub releases',
+    artifact: 'micro-wallet-desktop.dmg',
+    version: '2.11.5',
+    commit: '6681ca630e14',
+  } as const;
+
+  // The state today, and the only one in which "no artifact is in front of users" is KNOWN.
+  assert.equal(distributionVerdict(notShipped, { tags: [] }), 'undistributed');
+  // The false-green this exists to prevent: the registry making a false statement about what a
+  // user can install. Loud, and a non-zero exit, because a stale record here is not a tidiness
+  // problem — it is the estate being unable to name a build people are running.
+  assert.equal(distributionVerdict(notShipped, { tags: ['v1.0.0'] }), 'shipped');
+  // Both tag spellings this organisation uses, because a record reported `missing` over a leading
+  // 'v' would be a false alarm, and a false alarm is how a check gets switched off.
+  assert.equal(distributionVerdict(shipped, { tags: ['tauri-v2.11.5', 'v2.11.5'] }), 'confirmed');
+  assert.equal(distributionVerdict(shipped, { tags: ['2.11.5'] }), 'confirmed');
+  // A claim that users hold something they do not.
+  assert.equal(distributionVerdict(shipped, { tags: ['2.11.4'] }), 'missing');
+  // Verification that could not run is a failure, never a pass — `release --verify` says the same.
+  assert.equal(distributionVerdict(notShipped, { reason: 'GitHub answered nothing' }), 'unreadable');
+  assert.equal(distributionVerdict(shipped, { reason: 'GitHub answered nothing' }), 'unreadable');
+});
+
+test('a client workflow that can publish is found, and one that only mentions publishing is not', () => {
+  // The offline half, and the one that runs where the estate is checked out rather than where the
+  // network is. It watches for the FIRST commit that turns a client into something a user can
+  // install, in the repository where that commit lands — so the record cannot go stale quietly.
+  assert.equal(
+    publishesAnArtifact('jobs:\n  release:\n    steps:\n      - run: gh release create v1.0.0 out/*.dmg\n'),
+    'gh release create',
+  );
+  assert.equal(
+    publishesAnArtifact('      - uses: tauri-apps/tauri-action@v0\n        with:\n          tagName: v__VERSION__\n'),
+    'tauri-apps/tauri-action',
+  );
+  assert.equal(publishesAnArtifact('      - run: pnpm dlx web-ext sign --channel listed\n'), 'web-ext sign');
+
+  // micro-org#303: the first `cfctl cross` run claimed eleven edges out of one file and ten were
+  // CITATIONS IN PROSE. All three of these workflows carry argued headers, and the header in
+  // micro-wallet-desktop's ci.yml explains what the repository does NOT do. A comment saying "we
+  // do not run gh release create here" must not read as running it.
+  assert.equal(
+    publishesAnArtifact('# nothing here runs gh release create; see tools/registry.ts\njobs:\n  ci:\n'),
+    undefined,
+  );
+  // A `#` opens a comment only at the start of a line or after whitespace — YAML's rule, which
+  // source-scan.mjs implements and this relies on rather than restates.
+  assert.equal(publishesAnArtifact('      - run: echo "url#gh release create"\n'), 'gh release create');
+
+  // Signing and notarisation are deliberately NOT markers, though every row's blockedOn names
+  // them: a signed build that is uploaded nowhere is still in front of nobody, and `codesign`
+  // appears in macOS build steps that ship nothing. A sensor that fires on a prerequisite fires
+  // early, and a check that cries wolf is a check that gets deleted.
+  assert.equal(publishesAnArtifact('      - run: codesign --deep --sign "Developer ID" out/app\n'), undefined);
+  assert.equal(publishesAnArtifact('      - run: pnpm build && pnpm test\n'), undefined);
+});
+
+test('every client checkout on this machine is described by its row, or the row is stale', () => {
+  // Vacuity guard, and it is the reason this test looks odd: in micro-org's own CI the only
+  // sibling is micro-org, so a loop over the checkouts asserts nothing and would go green forever
+  // — the failure mode this estate keeps rediscovering. So the ROW is what is checked, always, and
+  // the checkout is only compared when it is actually here.
+  for (const client of clientRepos()) {
+    assert.equal(client.repo, `micro-${client.name}`);
+    assert.equal(client.path, `micro/${client.name}`);
+    assert.equal(client.kind, 'client');
+    assert.equal(client.managed, true);
+  }
+  const checkedOut = clientRepos().filter((client) => inspect(client).state !== 'absent');
+  for (const client of checkedOut) {
+    // A client that is checked out has a package.json with a version, because that version is what
+    // `cfctl clients` prints as "what is built here" beside "what is distributed".
+    const manifest = JSON.parse(readFileSync(path.join(inspect(client).dir, 'package.json'), 'utf8')) as {
+      version?: string;
+      private?: boolean;
+    };
+    assert.match(manifest.version ?? '', /^\d+\.\d+\.\d+/, `${client.name} has no version to print`);
+    // `private: true` is the evidence the kind was argued from: these publish no package, so
+    // `library` would have fed a private version into doctor's "which @cloudsforge package can a
+    // consumer resolve" map, answering a question nobody asked.
+    assert.equal(manifest.private, true, `${client.name} is no longer private; re-argue its kind`);
+  }
 });
 
 // -- resolving where the checkouts are -----------------------------------------------------------

@@ -11,6 +11,9 @@
 //   cfctl bump <version>           move every deployable to one version on a release/<v> branch
 //   cfctl release <version>        generate releases/<version>.yaml, one image per service
 //   cfctl release --verify <v>     check every image exists and is still the image that was pinned
+//   cfctl clients [--verify]       what is in front of users for the three wallet clients — the
+//                                  question a release manifest asks of 48 images, asked of the
+//                                  three builds it cannot name (micro-org#352)
 //   cfctl new service <name>       instantiate micro-service-template
 //   cfctl new web <name>           instantiate micro-web-template
 //
@@ -51,9 +54,12 @@ import {
   ALLOWED_SCOPED_PACKAGES,
   ORG,
   REGISTRY,
+  clientRepos,
   deployableRepos,
   imageFor,
   managedRepos,
+  type ClientRepo,
+  type Distribution,
   type ManagedRepo,
   type Repo,
 } from './registry.ts';
@@ -1796,6 +1802,24 @@ function cmdRelease(args: Args): number {
         `artifact. Once their images have published, re-run:  cfctl release ${version} --force\n`,
     );
   }
+
+  // PRINTED AT THE CUT, not left to a separate command nobody runs. A manifest is "the record of
+  // what was deployed" and it can only record container images, so an operator reading one has no
+  // way to tell a client that ships from a client that does not — `releases/README.md`'s own
+  // argument, that "a release where one of the seven was forgotten looks exactly like a release
+  // where it was not", applied to three builds the format cannot name at all. Saying it here means
+  // no release is cut without the person cutting it being told what is true of the other three.
+  const clients = clientStates();
+  if (clients.length > 0) {
+    const distributed = clients.filter((state) => state.repo.distribution.state === 'distributed').length;
+    process.stdout.write(
+      `\nthis manifest names container images only. ${clients.length} wallet client(s) are outside it — ` +
+        `${distributed} distributed, ${clients.length - distributed} recorded as built and deliberately not:\n`,
+    );
+    writeClientTable(clients);
+    process.stdout.write(`\ncheck those records against GitHub:  cfctl clients --verify\n`);
+  }
+
   process.stdout.write(`\nverify it before deploying:  cfctl release --verify ${version}\n`);
   return 0;
 }
@@ -1909,6 +1933,353 @@ function verifyRelease(file: string): number {
       '(micro-org#288). Manifests cut from 2026-08-09 record digests and do not have this hole.\n',
   );
   return 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// clients — the question a release manifest cannot ask, asked anyway (micro-org#352)
+// ---------------------------------------------------------------------------------------------
+//
+// A release manifest names 48 container images and, for each, which artifact was built from which
+// commit. A desktop binary is not a container image; neither is an MV3 bundle or an Android
+// bundle. So the estate's ONE mechanism for saying what is shipped could say nothing at all about
+// `micro-wallet-desktop`, `micro-wallet-extension` and `micro-wallet-mobile` — not "shipped", not
+// "not shipped", not "at what version". `releases/README.md` argues a release must be a file
+// rather than a tag because "a release where one of the seven was forgotten looks exactly like a
+// release where it was not". These three were forgotten by construction.
+//
+// WHAT THIS IS NOT, AND WHY THAT MATTERS MORE THAN WHAT IT IS. Registering the five wallet
+// repositories removes five permanent `doctor` FAILs. Removing five failures and adding nothing
+// would leave the estate QUIETER AND LESS INFORMED than before — the only thing that had ever
+// said anything about these repositories was the noise being deleted, and a regression that makes
+// a red list green is the hardest kind to notice. So the state those failures implied is now
+// recorded rather than inferred: `Distribution` in registry.ts is a required field on every client
+// row, and this command is what prints it.
+//
+// ── WHY A COMMAND AND A REGISTRY FIELD, RATHER THAN A SECOND FILE ─────────────────────────────
+//
+// The obvious shape is `releases/clients.yaml`, mirroring the manifest that already works. It was
+// rejected on registry.ts's own opening argument: `clone-all.sh` and `pull-all.sh` each carried a
+// copy of the repository list and they drifted, and "two lists is one list that is wrong". A file
+// listing the clients would be a second place that has to agree with the registry about which
+// repositories exist, and the first thing to go stale would be the file nobody's tooling reads.
+//
+// Extending the release manifest itself was the other candidate, and it is worse for a concrete
+// reason rather than an aesthetic one: `micro-deploy/scripts/release-render.py` parses that format
+// and deliberately mirrors `parseManifest` above, on the rule that "a manifest that is not exactly
+// this shape was not generated by cfctl and should not be deployed". A new top-level section is a
+// cross-repository format change that cannot be verified from here — and `parseManifest`'s own
+// `absent:` handling would silently swallow the new block's list items until it was taught not to.
+// A release manifest is also the wrong cadence: clients ship on store review timescales, not on
+// the estate's, and a manifest is "the record of what was deployed" for things that were.
+//
+// So: ONE list, the registry, holding the DECISION; the checkouts holding the MEASUREMENT (each
+// client's version and HEAD); and this command joining them at print time, so there is nothing
+// duplicated to drift. `cfctl release` prints the same block when it cuts a manifest, so the
+// operator who is about to deploy 48 images is told, in the same breath, what is true of the three
+// things that are not among them.
+//
+// ── HOW THIS GOES RED WHEN IT STOPS BEING TRUE ───────────────────────────────────────────────
+//
+// A record whose only property is that somebody wrote it down once is a comment. Two sensors, and
+// they fail in opposite directions on purpose:
+//
+//   * OFFLINE, and the one that runs anywhere the estate is checked out: a client whose CI has
+//     grown a step that PUBLISHES an artifact, while its row still says nothing is distributed.
+//     `publishesAnArtifact` below. Measured 2026-08-10: none of the three has one — every `uses:`
+//     in all three `ci.yml` files is checkout, setup-node, pnpm/action-setup, a Rust toolchain, or
+//     micro-org's own `secret-hygiene.yml`.
+//   * ONLINE (`--verify`): what GitHub says each client repository has actually released, against
+//     what the row claims. Measured 2026-08-10: all five wallet repositories have zero releases and
+//     zero tags. A `none` record and a published release is the loud case, and it is loud because
+//     the record is then a FALSE STATEMENT about what a user can install rather than a stale one.
+//
+// THE RESIDUAL, STATED RATHER THAN PAPERED OVER: neither sensor can see a Chrome Web Store listing
+// uploaded by a person from a laptop, because nothing in this organisation is touched when that
+// happens. What is claimed is narrower and true — a client distributed BY THIS ESTATE'S MACHINERY,
+// or by a GitHub release on its own repository, cannot stay unrecorded. The three blockers each
+// row names in `blockedOn` are the owner's to clear, and clearing them is what puts a publish step
+// into one of these repositories, which is the thing the offline sensor is watching for.
+
+/** What GitHub just said about a repository's releases. Never a count on its own — see below. */
+export interface ReleaseAnswer {
+  /** The tags of every non-draft release, or undefined when GitHub did not answer with a list. */
+  readonly tags?: readonly string[];
+  readonly reason?: string;
+}
+
+/**
+ * Read GitHub's answer to "what has this repository released".
+ *
+ * THE WHOLE POINT IS THE DIFFERENCE BETWEEN `[]` AND AN ERROR, and it is the same trap
+ * `readGhcrTokenAnswer` documents one screen up. `[]` means "this repository has published
+ * nothing", which is a finding. `{"message":"Not Found"}` — what the API returns for a repository
+ * a caller cannot see, which is every private repository asked about anonymously — means "I could
+ * not tell you", and a reader that counted its way to zero would report a private, shipping client
+ * as undistributed. That is the exact failure mode this whole command exists to prevent, arriving
+ * through the check meant to catch it.
+ *
+ * Pure and exported for the reason the two GHCR readers are: a check whose only test is the
+ * internet is a check that is silently wrong between outages.
+ *
+ * DRAFTS ARE NOT RELEASES. A draft is invisible to everyone but the repository's own maintainers,
+ * so it is not an artifact in front of a user and must not read as one. A PRERELEASE is public, is
+ * downloadable by anybody with the link, and counts.
+ */
+export function readGithubReleases(body: string): ReleaseAnswer {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { reason: 'GitHub answered with something that is not JSON' };
+  }
+  if (!Array.isArray(parsed)) {
+    const message = (parsed as { message?: unknown } | null)?.message;
+    return {
+      reason:
+        typeof message === 'string'
+          ? `GitHub answered '${message}' rather than a list of releases`
+          : 'GitHub answered with something that is not a list of releases',
+    };
+  }
+  const tags: string[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) {
+      return { reason: 'a release in the list is not an object' };
+    }
+    const release = entry as { tag_name?: unknown; draft?: unknown };
+    if (release.draft === true) continue;
+    // A release with no readable tag makes the whole answer untrustworthy rather than one entry
+    // shorter: the question is "is anything published", and an entry this cannot name is an entry
+    // it cannot rule out.
+    if (typeof release.tag_name !== 'string' || release.tag_name === '') {
+      return { reason: 'a release in the list carries no tag_name' };
+    }
+    tags.push(release.tag_name);
+  }
+  return { tags };
+}
+
+/** Ask GitHub what a repository has released. Authenticated when a token is in the environment. */
+export function githubReleases(repo: string): ReleaseAnswer {
+  if (!hasCommand('curl')) return { reason: 'curl is not available' };
+  // Anonymous works for a public repository and is rate-limited per IP, which on a shared CI runner
+  // runs out. A token is used when one is present and never printed; without one this can still
+  // answer, and when it cannot it says so rather than counting to zero.
+  const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'] ?? '';
+  const auth = token === '' ? [] : ['-H', `Authorization: Bearer ${token}`];
+  const result = run('curl', [
+    '-s',
+    '-m',
+    '15',
+    '-H',
+    'Accept: application/vnd.github+json',
+    '-H',
+    'X-GitHub-Api-Version: 2022-11-28',
+    ...auth,
+    `https://api.github.com/repos/${ORG}/${repo}/releases?per_page=100`,
+  ]);
+  if (!result.ok) return { reason: 'GitHub did not answer the releases request' };
+  return readGithubReleases(result.out);
+}
+
+/**
+ * The five things `cfctl clients --verify` can conclude about one client, and none is a boolean.
+ *
+ *   `undistributed` the row says nothing is distributed and GitHub has published nothing. The only
+ *                   state in which "no artifact is in front of users" is KNOWN rather than assumed.
+ *   `shipped`       the row says nothing is distributed and something has been published. The loud
+ *                   one: the registry is making a false statement about what a user can install,
+ *                   and it is the failure this record exists to make impossible to hold quietly.
+ *   `confirmed`     the row names a distributed artifact and GitHub has a release for that version.
+ *   `missing`       the row names a distributed artifact and there is no release for it — a claim
+ *                   that users have something they do not.
+ *   `unreadable`    GitHub would not answer. Verification that cannot run is not verification, so
+ *                   this is a failure rather than a shrug — `--verify` for images says the same.
+ */
+export type DistributionVerdict = 'undistributed' | 'shipped' | 'confirmed' | 'missing' | 'unreadable';
+
+export function distributionVerdict(record: Distribution, answer: ReleaseAnswer): DistributionVerdict {
+  if (!answer.tags) return 'unreadable';
+  if (record.state === 'none') return answer.tags.length === 0 ? 'undistributed' : 'shipped';
+  // `v1.2.3` and `1.2.3` are both in use across this organisation's tags, and a record that matched
+  // only one spelling would report a shipped client as `missing` on a naming convention.
+  return answer.tags.some((tag) => tag === record.version || tag === `v${record.version}`) ? 'confirmed' : 'missing';
+}
+
+/**
+ * The markers of a workflow step that can put a build in front of a user, or undefined.
+ *
+ * DELIBERATELY PUBLISH VERBS ONLY. Signing and notarisation are NOT here, even though every row's
+ * `blockedOn` names them, because a signing step landing is not yet a user holding a build — and a
+ * `codesign` invocation appears in macOS build scripts that ship nothing. A sensor that fires on a
+ * prerequisite is a sensor that fires early and is switched off; this estate's recurring defect is
+ * the check nobody reads, and a false FAIL is the fastest way to make one.
+ *
+ * Comments are blanked before matching, on micro-org#303's rule: the first run of `cfctl cross`
+ * claimed eleven edges out of one file and ten of them were CITATIONS IN PROSE. These workflow
+ * files carry long argued headers — the one in `micro-wallet-desktop/.github/workflows/ci.yml`
+ * explains what it does not do — and a header explaining why a repository does not publish must
+ * not read as the repository publishing.
+ */
+const PUBLISH_MARKERS: readonly string[] = [
+  'gh release create',
+  'softprops/action-gh-release',
+  'actions/upload-release-asset',
+  'tauri-apps/tauri-action',
+  'chrome-webstore-upload',
+  'addons.mozilla.org/api',
+  'web-ext sign',
+  'upload-google-play',
+  'apple-actions/upload-testflight-build',
+  'app-store-connect',
+  'xcrun altool',
+  'npm publish',
+  'pnpm publish',
+];
+
+export function publishesAnArtifact(source: string): string | undefined {
+  const body = blankComments(source, { syntax: 'hash' });
+  return PUBLISH_MARKERS.find((marker) => body.includes(marker));
+}
+
+/** One line of the clients table: what the row records, and what the checkout measures. */
+interface ClientState {
+  readonly repo: ClientRepo;
+  /** package.json version of the checkout, or '' when it is not on this machine. */
+  readonly version: string;
+  /** HEAD of the checkout, or '' when it is not on this machine. */
+  readonly commit: string;
+  readonly present: boolean;
+  /** A workflow that can publish, while the row says nothing is distributed. */
+  readonly publishPath?: { readonly file: string; readonly marker: string };
+}
+
+export function clientStates(): ClientState[] {
+  const states: ClientState[] = [];
+  for (const repo of clientRepos()) {
+    const checkout = inspect(repo);
+    const present = checkout.state !== 'absent' && checkout.state !== 'not-a-repo';
+    let publishPath: { file: string; marker: string } | undefined;
+    if (present && repo.distribution.state === 'none') {
+      for (const file of workflowFiles(checkout.dir)) {
+        const marker = publishesAnArtifact(readFileSync(file, 'utf8'));
+        if (marker !== undefined) {
+          publishPath = { file: path.relative(checkout.dir, file), marker };
+          break;
+        }
+      }
+    }
+    states.push({
+      repo,
+      version: present ? (readManifest(path.join(checkout.dir, 'package.json'))?.version ?? '') : '',
+      commit: present ? checkout.head : '',
+      present,
+      ...(publishPath ? { publishPath } : {}),
+    });
+  }
+  return states;
+}
+
+/** The block `cfctl clients` prints, and that `cfctl release` reprints when it cuts a manifest. */
+function writeClientTable(states: readonly ClientState[]): void {
+  process.stdout.write(
+    `${pad('CLIENT', 18)}${pad('VERSION', 9)}${pad('COMMIT', 14)}${pad('STATE', 14)}${pad('SINCE', 12)}ARTIFACT\n`,
+  );
+  for (const state of states) {
+    const record = state.repo.distribution;
+    const artifact = record.state === 'none' ? '—  (nothing is in front of users)' : `${record.artifact} · ${record.channel}`;
+    process.stdout.write(
+      `${pad(state.repo.name, 18)}${pad(state.version || '—', 9)}${pad(state.commit || '—', 14)}` +
+        `${pad(record.state === 'none' ? 'not shipped' : 'distributed', 14)}${pad(record.since, 12)}${artifact}\n`,
+    );
+    if (record.state === 'none') {
+      for (const blocker of record.blockedOn) process.stdout.write(`${' '.repeat(24)}↳ waiting on ${blocker}\n`);
+    } else {
+      process.stdout.write(`${' '.repeat(24)}↳ built from ${record.commit}\n`);
+    }
+  }
+}
+
+function cmdClients(args: Args): number {
+  const states = clientStates();
+  writeClientTable(states);
+
+  const distributed = states.filter((state) => state.repo.distribution.state === 'distributed').length;
+  process.stdout.write(
+    `\n${states.length} client(s) · ${distributed} distributed · ${states.length - distributed} recorded as built and ` +
+      'deliberately not distributed\n',
+  );
+  // Said in words rather than left to a dash in a column. This is the sentence a release manifest
+  // cannot contain, and it is the whole answer to micro-org#352 item 3.
+  if (distributed === 0) {
+    process.stdout.write(
+      'No client artifact is in front of users. A release manifest names container images and none of\n' +
+        'these is one, so this is where the same question is answered for them — and the answer is\n' +
+        "'none', with a date and with what each is waiting on, rather than a silence that reads the same.\n",
+    );
+  }
+
+  let failed = 0;
+  for (const state of states) {
+    if (!state.present) {
+      process.stdout.write(`info  ${state.repo.name} is not checked out; its version and commit are unknown here\n`);
+    }
+    if (state.publishPath) {
+      failed += 1;
+      process.stdout.write(
+        `::error::${state.repo.name} — ${state.publishPath.file} contains '${state.publishPath.marker}', which ` +
+          `publishes an artifact, and tools/registry.ts records this client as NOT DISTRIBUTED since ` +
+          `${state.repo.distribution.since}. One of the two is wrong and it is not the workflow.\n`,
+      );
+    }
+  }
+
+  if (!args.flag('verify')) {
+    if (failed === 0) {
+      process.stdout.write("\nnothing in these checkouts can publish. Ask GitHub too:  cfctl clients --verify\n");
+    }
+    return failed > 0 ? 1 : 0;
+  }
+
+  process.stdout.write(`\nasking GitHub what each client has released (${states.length} lookups)\n`);
+  for (const state of states) {
+    const answer = githubReleases(state.repo.repo);
+    const record = state.repo.distribution;
+    switch (distributionVerdict(record, answer)) {
+      case 'undistributed':
+        process.stdout.write(`ok: ${state.repo.name} — GitHub has published no release, as recorded\n`);
+        break;
+      case 'confirmed':
+        process.stdout.write(`ok: ${state.repo.name} — ${record.state === 'distributed' ? record.artifact : ''} is released\n`);
+        break;
+      case 'shipped':
+        failed += 1;
+        process.stdout.write(
+          `::error::${state.repo.name} — THIS CLIENT IS DISTRIBUTED AND THE REGISTRY SAYS IT IS NOT. ` +
+            `GitHub serves release(s) ${(answer.tags ?? []).join(', ')}; tools/registry.ts records ` +
+            `'none' since ${record.since}. Users have a build nothing in this estate can name.\n`,
+        );
+        break;
+      case 'missing':
+        failed += 1;
+        process.stdout.write(
+          `::error::${state.repo.name} — the registry records a distributed artifact and GitHub has no ` +
+            `release for it. That is a claim that users hold something they do not.\n`,
+        );
+        break;
+      case 'unreadable':
+        failed += 1;
+        process.stdout.write(`::error::${state.repo.name} — could not be checked: ${answer.reason ?? 'no answer'}\n`);
+        break;
+    }
+  }
+
+  process.stdout.write(
+    failed > 0
+      ? `\n${failed} client record(s) could not be confirmed against GitHub. Do not treat this list as current.\n`
+      : `\nall ${states.length} client records agree with what GitHub has published\n`,
+  );
+  return failed > 0 ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2070,6 +2441,7 @@ const USAGE = `cfctl — CloudsForge organisation machinery (AD-03)
   cfctl bump <version> [--only a,b] [--notes <file>] [--any-branch] [--push]
   cfctl release <version> [--force]
   cfctl release --verify <version>
+  cfctl clients [--verify]
   cfctl new service <name>
   cfctl new web <name>
 
@@ -2093,6 +2465,8 @@ export function main(argv: readonly string[]): number {
       return cmdBump(args);
     case 'release':
       return cmdRelease(args);
+    case 'clients':
+      return cmdClients(args);
     case 'new':
       return cmdNew(args);
     default:
