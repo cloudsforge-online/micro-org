@@ -19,7 +19,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -278,5 +278,195 @@ describe('a path in a comment is not a file the test opens', () => {
       [['identity']],
       'a path cited in prose was counted as a checkout read',
     );
+  });
+});
+
+// -- the edges as data -------------------------------------------------------------------------
+
+describe('the edges, in a shape a workflow can act on', () => {
+  // The trigger has to INSTALL each reader before its suite can run — a CI runner has no
+  // node_modules, and @cloudsforge/* resolves through `link:` to a sibling that must be installed
+  // first. So the sweep has to say who reads whom before it runs anything, and say it as data: the
+  // alternative was a workflow parsing the padded table with awk, which turns a column change into
+  // an empty reader list, which reads downstream as an estate that agrees.
+  it('names the readers, the files and what they read, narrowed by --repo', () => {
+    const { code, out } = cross(estate("{ BTC: 'bitcoin', LTC: 'litecoin' }"), '--json', '--repo', 'wallet');
+    assert.equal(code, 0, out);
+    assert.deepEqual(JSON.parse(out), {
+      total: 1,
+      repo: 'wallet',
+      readers: [{ repo: 'hub-web', files: ['test/assets.test.js'], reads: ['wallet'] }],
+      unclassified: 0,
+    });
+  });
+
+  // The floor the workflow enforces is the ESTATE-wide count, not the narrowed one: a caller
+  // asking about one repository still needs to know the detector is matching at all.
+  it('reports the estate-wide total even when the answer is narrowed', () => {
+    const { out } = cross(estate("{ LTC: 'litecoin' }"), '--json', '--repo', 'contracts');
+    const scan = JSON.parse(out);
+    assert.equal(scan.total, 1, 'the total is the whole tree, so an empty narrowing is still not zero');
+    assert.deepEqual(scan.readers, [], 'nothing in this tree reads contracts');
+  });
+
+  // It lists, it does not run. This fixture DISAGREES — `cfctl cross` on it exits 1 four tests up —
+  // and asking who reads whom must not answer that question by accident, or the workflow would
+  // have run every reader's suite before it had installed any of them.
+  it('runs nothing, so a disagreeing estate still answers 0', () => {
+    const { code, out } = cross(estate("{ BTC: 'bitcoin' }"), '--json', '--repo', 'wallet');
+    assert.equal(code, 0, out);
+    assert.equal(JSON.parse(out).readers.length, 1);
+  });
+
+  // Still parseable when it is refusing. The workflow reads `.total` out of this file to decide
+  // whether the sweep is broken, and a bare error message there would be a `jq` failure whose
+  // cause is two steps away from what it says.
+  it('an empty working tree is red AND is still JSON', () => {
+    const { code, out } = cross(mkdtempSync(path.join(tmpdir(), 'cfctl-empty-json-')), '--json');
+    assert.equal(code, 1, out);
+    assert.equal(JSON.parse(out).total, 0);
+  });
+});
+
+// -- the trigger -------------------------------------------------------------------------------
+
+/**
+ * WHAT MAKES THE SWEEP RUN WHEN AN UPSTREAM MERGES, checked as a wire contract rather than
+ * remembered.
+ *
+ * The mechanism is two files agreeing about one string: `service-ci.yml` and `web-ci.yml` POST a
+ * `repository_dispatch` from every caller's main build, and `cross-repo.yml` in this repository
+ * listens for it. Both halves are green when they disagree — the sender gets its 204, the receiver
+ * sits there listening for a type nobody sends — and the estate then goes on believing it has a
+ * trigger. That is micro-org#304 rebuilt one layer up, so the two ends are compared here.
+ */
+describe('the merge trigger', () => {
+  const workflow = (file: string): string =>
+    readFileSync(fileURLToPath(new URL(`../.github/workflows/${file}`, import.meta.url)), 'utf8');
+
+  const RECEIVER = workflow('cross-repo.yml');
+  const SENDERS = { 'service-ci.yml': workflow('service-ci.yml'), 'web-ci.yml': workflow('web-ci.yml') };
+
+  /** The dispatch step of a sender, from its name to the end of the file. */
+  const dispatchStep = (yaml: string): string => {
+    const at = yaml.indexOf('- name: Dispatch the cross-repository sweep');
+    assert.notEqual(at, -1, 'the sender step is missing');
+    return yaml.slice(at);
+  };
+
+  it('the type the senders send is the type the receiver listens for', () => {
+    for (const [file, yaml] of Object.entries(SENDERS)) {
+      const sent = /-f "event_type=([a-z0-9-]+)"/.exec(dispatchStep(yaml))?.[1];
+      assert.ok(sent, `${file} sends no event_type`);
+      assert.ok(
+        new RegExp(`repository_dispatch:\\s*\\n\\s*types: \\[${sent}\\]`).test(RECEIVER),
+        `${file} sends '${sent}', which cross-repo.yml does not listen for`,
+      );
+    }
+  });
+
+  it('every field the receiver reads is a field both senders send', () => {
+    for (const field of [...RECEIVER.matchAll(/github\.event\.client_payload\.([a-z]+)/g)].map((m) => m[1])) {
+      for (const [file, yaml] of Object.entries(SENDERS)) {
+        assert.ok(
+          dispatchStep(yaml).includes(`client_payload[${field}]=`),
+          `cross-repo.yml reads client_payload.${field}, which ${file} never sends`,
+        );
+      }
+    }
+  });
+
+  it('the two senders are the same sender, so they cannot drift', () => {
+    // web-ci.yml's header says the copy is held identical here. Everything except the input the
+    // repository is named by — a service knows itself as `inputs.service`, a frontend as
+    // `inputs.app` — and except the prose, which is allowed to differ because each file argues its
+    // own case. What must not differ is a line either shell executes.
+    const body = (yaml: string): string =>
+      dispatchStep(yaml)
+        .replace('inputs.app', 'inputs.service')
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('#'))
+        .join('\n');
+    assert.equal(body(SENDERS['web-ci.yml']), body(SENDERS['service-ci.yml']));
+  });
+
+  it('only a merge to main asks — not a pull request, not a release branch', () => {
+    for (const [file, yaml] of Object.entries(SENDERS)) {
+      assert.ok(
+        yaml.includes("if: github.event_name == 'push' && github.ref == 'refs/heads/main'"),
+        `${file} would dispatch on a ref no downstream resolves`,
+      );
+    }
+  });
+
+  // ── THE REJECTED MECHANISM, ASSERTED RATHER THAN REMEMBERED ──────────────────────────────────
+  // A sender that cloned the estate and ran the readers' suites would turn a service's main build
+  // red for a defect its author did not cause and cannot fix, which is how an estate-wide gate
+  // gets switched off within a week (`estate-ci.yml`'s header, and the sibling assertion in
+  // test/workflow-shell.test.ts). The upstream sends and does not wait.
+  it('the sender cannot turn the merging repository red', () => {
+    for (const [file, yaml] of Object.entries(SENDERS)) {
+      const step = dispatchStep(yaml);
+      assert.doesNotMatch(step, /cfctl/, `${file} runs the sweep itself instead of asking for it`);
+      assert.doesNotMatch(step, /git clone/, `${file} clones the estate in a per-repository build`);
+      assert.match(step, /::warning::could not ask micro-org/, `${file} must say so when it cannot dispatch`);
+      assert.doesNotMatch(step.split('::warning::')[1] ?? '', /exit 1/, `${file} fails a build over micro-org's token`);
+    }
+  });
+
+  it('the receiver never puts a dispatched value into a shell', () => {
+    // Every field arrives in an HTTP body written by whoever holds a token, and two of them become
+    // a directory and a `git fetch` argument. `${{ }}` inside a `run:` block is substituted before
+    // bash sees the line, so the values are bound to env once, at the top, and quoted from there.
+    for (const block of RECEIVER.split(/\n {8}run: \|/).slice(1)) {
+      const body = block.split(/\n {6}- /)[0] ?? '';
+      assert.doesNotMatch(body, /\$\{\{[^}]*client_payload/, 'a dispatched value is interpolated into a run block');
+    }
+    assert.match(RECEIVER, /UPSTREAM: \$\{\{ github\.event\.client_payload\.repo/);
+  });
+
+  it('the receiver refuses a payload that is not a repository name or a commit', () => {
+    assert.match(RECEIVER, /is not the shape of a repository name/);
+    assert.match(RECEIVER, /is not the shape of a commit/);
+  });
+
+  it('the receiver asks only about the repository that moved', () => {
+    assert.match(RECEIVER, /cfctl\.ts cross --repo "\$UPSTREAM"/);
+  });
+
+  // The two ways this sweep can report agreement it never checked, both of them fatal in the
+  // workflow: a clone that failed (a reader that is not on disk holds no checks) and a detector
+  // that stopped matching (an estate-wide total below the floor measured on 2026-08-10).
+  it('the receiver treats a partial estate and an empty sweep as failures', () => {
+    assert.match(RECEIVER, /MIN_CHECKS: \d+/);
+    assert.match(RECEIVER, /::error::.*cross-repository checks found in the whole estate/);
+    assert.match(RECEIVER, /::error::a repository in the estate could not be cloned/);
+    assert.match(RECEIVER, /::error::a reader could not be installed/);
+  });
+
+  // estate-ci.yml's rule, applied to the workflow that borrowed the rest of its shape: the tests
+  // above pin that `cfctl cross` goes red, and NONE of them pin that the job does. Between the two
+  // sit an install, a `tee` and an exit code — plumbing that is wrong once and silent forever,
+  // reporting the tick of an estate that agrees. The canary plants the #304 scenario in a scratch
+  // directory and requires the red, graded on what it NAMES: a partial clone, a missing tsx and a
+  // renamed subcommand all exit non-zero too.
+  it('the receiver carries a canary, graded on more than an exit code', () => {
+    assert.match(RECEIVER, /- name: The canary — a reader that disagrees really does turn this job red/);
+    assert.match(RECEIVER, /the sweep stayed GREEN with a downstream that reads an asset the upstream dropped/);
+    assert.match(RECEIVER, /grep -q 'canary: wallet no longer moves LTC'/, 'the red must be attributed to the planted disagreement');
+    assert.match(RECEIVER, /the canary fixture was not written/, 'this estate has graded an unchanged file before');
+    assert.match(RECEIVER, /the canary survived into the estate checkout/, 'and it must be proven out of the real sweep');
+    // Before the sweep, or it grades a run that has already reported.
+    assert.ok(
+      RECEIVER.indexOf('- name: The canary') < RECEIVER.indexOf('- name: The readers still agree with what merged'),
+      'the canary must run before the sweep it vouches for',
+    );
+  });
+
+  it('the receiver still runs when no upstream ever dispatches', () => {
+    // The dispatch needs a token with write access to micro-org. A mechanism whose whole value
+    // waits on a credential nobody has granted is a mechanism that reports success and does
+    // nothing, so the schedule asks the same question with no credential involved.
+    assert.match(RECEIVER, /schedule:\s*\n\s*- cron:/);
   });
 });

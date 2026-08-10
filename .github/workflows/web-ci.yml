@@ -318,3 +318,51 @@ jobs:
       - name: Down
         if: always()
         run: docker rm -f ci-${{ inputs.app }} || true
+
+  # ══════════════════════════════════════════════════════════════════════════════════════════════
+  # WHO BREAKS WHEN THIS REPOSITORY MERGES — micro-org#304. The same job service-ci.yml carries,
+  # for the same reason, and a frontend is on both ends of it: `site/test/estate-claims.test.ts`
+  # reads seven siblings, and micro-org's own `test/cross-repo.test.ts` reads `hub-web` and `site`.
+  #
+  # The whole argument — why the sweep runs in micro-org rather than here, why a failure to
+  # dispatch warns instead of failing, why only a merge to main asks — is written at the top of
+  # micro-org's `cross-repo.yml`, which is the file that answers this request. Kept as a copy of
+  # service-ci.yml's job rather than a call, because a reusable workflow calling a reusable
+  # workflow cannot pass this one what it needs without every caller declaring it; the two copies
+  # are held identical by `test/cross-repo.test.ts`, which compares the two steps line by line and
+  # fails if either the event type or one payload field drifts.
+  # ══════════════════════════════════════════════════════════════════════════════════════════════
+  downstream:
+    name: Ask micro-org to run the checks that read this repository
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the cross-repository sweep
+        env:
+          GH_TOKEN: ${{ secrets.estate_token || github.token }}
+          UPSTREAM: ${{ inputs.app }}
+          MERGED_SHA: ${{ github.sha }}
+          MERGED_BY: ${{ github.actor }}
+          MERGED_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          status=0
+          gh api -X POST "repos/cloudsforge-online/micro-org/dispatches" \
+            -f "event_type=upstream-merged" \
+            -f "client_payload[repo]=$UPSTREAM" \
+            -f "client_payload[sha]=$MERGED_SHA" \
+            -f "client_payload[actor]=$MERGED_BY" \
+            -f "client_payload[run]=$MERGED_RUN" \
+            > /dev/null 2>"$RUNNER_TEMP/dispatch.err" || status=$?
+
+          if [ "$status" -eq 0 ]; then
+            echo "ok: micro-org will run every check that reads '${UPSTREAM}' at ${MERGED_SHA}"
+            exit 0
+          fi
+
+          echo "::warning::could not ask micro-org to check the repositories that read '${UPSTREAM}'"
+          echo "The estate token needs contents:write on cloudsforge-online/micro-org to send a"
+          echo "repository_dispatch. Until it has it, the sweep runs on micro-org's nightly schedule"
+          echo "instead of on this merge — micro-org#304."
+          sed 's/^/  /' "$RUNNER_TEMP/dispatch.err" 2>/dev/null || true
