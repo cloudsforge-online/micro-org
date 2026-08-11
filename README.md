@@ -84,10 +84,14 @@ Five things follow from it:
    | --- | --- | --- |
    | a **testnet** measurement ([#243](https://github.com/cloudsforge-online/micro-org/issues/243)) | testnet stopped mailing reserved domains | mainnet sent 1,535 more messages over six days and emptied a paid allowance, until a *provider dashboard* said so |
    | a **CI** run ([#392](https://github.com/cloudsforge-online/micro-org/issues/392)) | the alert file was correct and present in the container | the running Prometheus had never read it — rule files are not `file_sd` — and had been in that state for 22 hours |
-   | a **re-verification sweep** ([#384](https://github.com/cloudsforge-online/micro-org/issues/384)) | the sweep ran | it had run against the wrong network |
+   | a **re-verification sweep** | the sweep ran | it had run against the wrong network |
+   | a **release manifest** ([#384](https://github.com/cloudsforge-online/micro-org/issues/384)) | every pin was valid: the images existed, the tags resolved, the digests were real, `--dry-run` was green | 45 of the 48 rows had been inherited unread from a file six days old, so the deploy rolled the estate back — the indexer by 87 commits — with every container healthy. Found five days later by reading `org.opencontainers.image.version` off the running containers |
 
-   All three are one mistake: **an artefact was verified and a running system was not.** The
-   repository was right in every case, and had been right for days.
+   All four are one mistake: **an artefact was verified and a running system was not.** The
+   repository was right in every case, and had been right for days. #384 is the sharpest of them,
+   because there the artefact was not merely right — it was *provably* right, by three separate
+   checks, and every one of those checks answers "is this pin valid" when the question that
+   mattered was "is this pin newer than the one it replaces".
 
    So the evidence in the closing comment names the network, and it is read out of the **running
    containers and databases** rather than out of a compose file, a manifest or a checkout — the
@@ -106,7 +110,7 @@ The three paragraphs before this list are all reconstruction, and the table in r
 ---
 
 **This repository is the Phase 2 gate.** AD-01 chose one repository per deployable — forty-six
-repositories in 03 §1, seventy in the organisation today — and stated the cost of that choice
+repositories in 03 §1, **78 in `tools/registry.ts` today, 67 of them managed** — and stated the cost of that choice
 plainly: a `@cloudsforge/contracts-*` minor bump
 would otherwise be ~48 file edits, 24 manual publishes, and no CI anywhere able to test the
 composed system. AD-02 and AD-03 are the machinery that pays that cost, and
@@ -123,7 +127,8 @@ composed system. AD-02 and AD-03 are the machinery that pays that cost, and
 | [`tools/compat.ts`](tools/compat.ts) | The contract compatibility checker. Fails on a removed field, a narrowed type or a renamed key; additive change passes. |
 | [`tools/cfctl.ts`](tools/cfctl.ts) | `list`, `clone`, `pull`, `doctor`, `cross`, `release`, `new`. Replaces `scripts/clone-all.sh` and `scripts/pull-all.sh`. |
 | [`tools/registry.ts`](tools/registry.ts) | The repository list. One copy. Two copies is one copy that is wrong. |
-| [`releases/`](releases/) | Release manifests, and why a manifest replaces `CLOUDSFORGE_TAG`. |
+| [`releases/`](releases/) | Release manifests, and why a manifest replaces `CLOUDSFORGE_TAG`. **Read its naming section before cutting one:** a release is `<year>.<month>.<sequence>`, `2026.08.21` is the twenty-first release of August 2026 rather than 21 August, and a release name must never be sorted. |
+| [`test/release-order.test.ts`](test/release-order.test.ts) | The guard that no release puts a service on an older image than the release before it. It exists because [#384](https://github.com/cloudsforge-online/micro-org/issues/384) deployed a manifest assembled by copy-and-edit whose 45 unedited rows were six days stale — valid, verifiable, and wrong. |
 | [`templates/`](templates/) | What `cfctl new service` and `cfctl new web` instantiate. |
 | [`renovate.json`](renovate.json) | The org-level preset. Grouped per contract package, auto-merged on green CI for `@cloudsforge/*`. |
 
@@ -147,7 +152,7 @@ shows the edges without running anything.
 
 ## The three measured mitigations
 
-Forty-six repositories is a lot for one team. Three things make it survivable, and each is a
+Seventy-eight repositories — 67 of them managed — is a lot for one team. Three things make it survivable, and each is a
 **number**, not an intention. They are reviewed at **every phase gate**, and they are the early
 warning that the repository decision is costing more than it returns. If any one of them is not
 being met, the topology should be revisited rather than endured.
