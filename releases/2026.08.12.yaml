@@ -1,0 +1,398 @@
+# CloudsForge release manifest.
+#
+# WHAT THIS RELEASE IS: two services that were never in a release at all, and one that prices
+# Bitcoin-family withdrawals from confirmed blocks.
+#
+# ── THE PART THAT IS NOT A CHANGE TO ANY SERVICE ─────────────────────────────────────────────
+#
+# `pool` and `pool-web` have been running on mainnet for weeks and NO manifest has ever named
+# them. Twelve files, `grep -c "name: pool"` is 0 in every one. They are not listed under
+# `absent:` either, so the hole said nothing in either direction: the files did not claim the pool
+# was out of the release, they simply never mentioned it.
+#
+# That is not a bookkeeping complaint. Both carry a `build:` in `docker-compose.estate.yml`, an
+# unpinned service keeps it, and `docker compose up` therefore reaches for a builder. Deploying
+# 2.5.19 to the app host on 2026-08-11 pulled all 48 images, passed `release-deploy.sh --dry-run`
+# ("all 46 image(s) exist") and then died at the switch:
+#
+#     #1 [internal] load local bake definitions
+#     unable to prepare context: path "/home/savvaniss/dev/cloudsforge/pool-web" not found
+#     deploy failed
+#
+# The app host has five sibling repositories checked out, not 48. Compose refuses the whole `up`
+# rather than half of it, so nothing moved and the estate was never at risk — but no release could
+# be deployed to that host at all, which is where the estate now runs. micro-org#380.
+#
+# The two rows below are pinned at the images those containers are ALREADY running, verified by
+# digest against the running container ids (`95728591cc67`, `295120ff4311`) rather than by tag —
+# so this release records what is there instead of moving it. micro-deploy#59 makes the renderer
+# REFUSE a release that leaves a buildable service unpinned, so the next service added to compose
+# cannot repeat this quietly.
+#
+# ── AND THE SERVICE THAT DOES CHANGE ─────────────────────────────────────────────────────────
+#
+# `settlement` 2.5.20 (micro-settlement#22, micro-org#373 stage 2). `bitcoind 27.0` answers
+# `estimatesmartfee` with `-32603 Fee estimation disabled` on every target, permanently — Core 25+
+# only constructs an estimator when it accepts incoming transactions, and this node runs
+# `blocksonly`. So Bitcoin-family withdrawals took the relay floor, and 1 sat/vB is not a
+# transaction that gets refused, it is one that is relayed and then sits.
+#
+# `getblockstats` reads CONFIRMED blocks and answers fine under `blocksonly`. The adapter now
+# takes the p90 across a 24-block trailing window of each block's 50th-percentile feerate, clamped
+# between the relay floor and the ceiling custody enforces on the signature, cached per
+# `network:tip` so the 24 calls are a per-block cost. A fractional `estimatesmartfee` answer is
+# also rounded UP rather than truncated: 1,500 sat/kvB is 1.5/vB, and taking 1 pays a third under
+# what the node just said was needed.
+#
+# NOTHING IS OPENED BY THIS. `SETTLEMENT_RPC_URLS` carries no `btc` key and `WALLET_FEE_QUOTES`
+# names no BTC, so settlement still answers `no_endpoint` for Bitcoin by name — measured against
+# the branch image on mainnet before this was cut, alongside `GET /v1/fees/ltc/mainnet/LTC`
+# answering 141 litoshi, which is the unchanged 1/vB across a 141 vB spend. Litecoin's estimator
+# has data again and keeps the estimator branch; the derivation is its fallback for the days it
+# does not, which is the state that same node was in on 2026-08-09.
+#
+# ── WHAT IS NOT IN THIS RELEASE ──────────────────────────────────────────────────────────────
+#
+# Every other service is byte-identical to 2026.08.11 and is pinned to the same tag, deliberately.
+# Restarting 43 healthy services to ship nothing is not a release, it is an outage with a version
+# number.
+version: "2026.08.12"
+generated: "2026-08-11T03:20:00.000Z"
+generator: hand-cut; settlement and both pool images verified against GHCR by tag and pinned by index digest
+services:
+  - name: identity
+    repo: micro-identity
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-identity
+    tag: "1.4.1"
+    commit: "0381e2bea1f6e84392c37616ff735bf0d99539af"
+    digest: "sha256:0b7fe77a94a994fcc72863c80260798116ddf14060dfa4784838cf942c5a7836"
+  - name: policy
+    repo: micro-policy
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-policy
+    tag: "1.1.0"
+    commit: "169dda3f041680f91b1068a411dd87a5d467d112"
+    digest: "sha256:497f46d5dde2ce8cfa4a7cb2ed63bca760671ca3350085d68e89e93eedc4655d"
+  - name: ledger
+    repo: micro-ledger
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-ledger
+    tag: "1.2.2"
+    commit: "ca389d69c9becec0e530e99fa5a8a39674ae17d2"
+    digest: "sha256:2f81bbe4d7c8f3fc5082f34a9a50f5cd083aad21037d60fdfb4917bbd07dc430"
+  - name: wallet
+    repo: micro-wallet
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-wallet
+    tag: "1.4.0"
+    commit: "41959fba5f96fb51dad0b6119a25e946d427445e"
+    digest: "sha256:3b448a2db353d4d8c97efcac2b2aa47ba30686ddaed0d029b1b7d57feb795564"
+  - name: settlement
+    repo: micro-settlement
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-settlement
+    tag: "2.5.20"
+    commit: "97f12efd290652d9e7c34f3e2ff157ca75f7faa1"
+    digest: "sha256:fa1c352469d6ce024409cc53216fb36f8fd9e392b722a8ec6e368c8ea90d4d94"
+  - name: pricing
+    repo: micro-pricing
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-pricing
+    tag: "1.3.0"
+    commit: "e786927c950e6a1020c0393e0d12508cdea27594"
+    digest: "sha256:8b650fc73b837295559ba9673408b2a321c27cc7f22055645ace83fa31fef110"
+  - name: billing
+    repo: micro-billing
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-billing
+    tag: "1.2.0"
+    commit: "a9b144ad69b3f11ed2ddc80f52dedc1a2c0a0778"
+    digest: "sha256:5fb0e61477e8fc2f1948284d32f4b2994c3445a8be2581235fe63f2d8e7ac59e"
+  - name: custody
+    repo: micro-custody
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-custody
+    tag: "1.2.0"
+    commit: "524b923d86aed7ce267b87f782a6f37c2b53a8ec"
+    digest: "sha256:a51d715273806a62387b1d63ad3f2772e9622e38f0280f2daf74813f9bde5a24"
+  - name: indexer
+    repo: micro-indexer
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-indexer
+    tag: "1.1.0"
+    commit: "ef45de5441ba2fbc7abab941972cf73ab49f8485"
+    digest: "sha256:60a053d6bf0fab74c604fbaf40047b28774c1500f58e7c98e7c53ef269953b87"
+  - name: activity
+    repo: micro-activity
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-activity
+    tag: "1.1.0"
+    commit: "b9ea2b33c1135908623a5bc7734e1553e84605b7"
+    digest: "sha256:cecdde4ec430f6a09184218a1ea16a8b0a8bd62edba8144a16cfae3c2519aa82"
+  - name: notify
+    repo: micro-notify
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-notify
+    tag: "1.3.0"
+    commit: "f662f19e99fab00d9144f6f89ef0f62cfc32a2e2"
+    digest: "sha256:9e1c3f205604546ec97c27fa05b11f90b449752276a0c5d43f56448989cf2dad"
+  - name: studio
+    repo: micro-studio
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-studio
+    tag: "1.3.0"
+    commit: "f2db7c0540952153f1740dac87592a26a9d03b03"
+    digest: "sha256:114fdaef7408f83435d6bc756606ec0361cd803731b29c298508fb2c8b29f04b"
+  - name: mint
+    repo: micro-mint
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-mint
+    tag: "1.3.0"
+    commit: "db5b2c2e6f8ad06b5013a84ad63b6340eba32980"
+    digest: "sha256:f83e211bd25160dcbfa678f742c783522208f75b5aee3fb7107861c3e1d7c765"
+  - name: market
+    repo: micro-market
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-market
+    tag: "1.2.0"
+    commit: "844d33b8cb05a76561c2fb5c5dfb2cb85b318fc7"
+    digest: "sha256:42bec0d6a004d561d992d45cb1d09da3ec4ce52d29589cb66063c4e53aa6ff4a"
+  - name: trade
+    repo: micro-trade
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-trade
+    tag: "1.1.0"
+    commit: "f6f0d7aeaf1b53e52c20c8f4c7ed0d90b5b5716d"
+    digest: "sha256:fa9bf7443ea74dbf92aa99c8be1ea7cb3feb1290643d158d4abad20061d76b8d"
+  - name: worlds
+    repo: micro-worlds
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-worlds
+    tag: "1.1.0"
+    commit: "0bb291db2941ef314f7cab814da29d1d25ee3945"
+    digest: "sha256:7fcde4aaf10d90e46c403ac3397ba4789036f944b729831bad6bc1bd46b5a642"
+  - name: nda
+    repo: micro-nda
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-nda
+    tag: "1.2.0"
+    commit: "8267d877a9ceb6ddef86fd85b688f6b1b81d7962"
+    digest: "sha256:1e2be5c38b80a200e9a6b8e5df52c3a3a1802a9b64ca3616d345b3d9fb900a02"
+  - name: community
+    repo: micro-community
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-community
+    tag: "1.2.0"
+    commit: "2743a424734adbb31bf0cedf850b59ea5056f4ac"
+    digest: "sha256:7510f390143d3e84201a3358f19d61c56737ee07522f62ae512a699ce74ad221"
+  - name: devplatform
+    repo: micro-devplatform
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-devplatform
+    tag: "1.1.0"
+    commit: "20b096ff6b6ab901f2e6c0e17806a4d432e8458f"
+    digest: "sha256:6a8820705cd32bc7839f83dd8e202d8b2d7780c02b3642ca4c0739226fb8d493"
+  - name: hub-api
+    repo: micro-hub-api
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-hub-api
+    tag: "1.1.0"
+    commit: "404907c4d471f7be09e2750c0e74c19623a16426"
+    digest: "sha256:b92ea66219e40abff5527b9bddfb326cf4bbd6321df6ad0a71a6424ad9732039"
+  - name: admin-api
+    repo: micro-admin-api
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-admin-api
+    tag: "1.3.0"
+    commit: "085dc523315e33d9ead76109556734fe49764397"
+    digest: "sha256:33334a2419342d202b1cd86243e4b4d9bfa7253dffb015867ac253503dc1c68f"
+  - name: analytics
+    repo: micro-analytics
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-analytics
+    tag: "1.2.0"
+    commit: "f1d2d76f8c8f7a4c1953171cd1eb9b5ffe61446b"
+    digest: "sha256:88aafcdb68b36a3a48643f10a11c579595e4f393534324040b2df0ead0f52c4d"
+  - name: emberkin
+    repo: micro-emberkin
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-emberkin
+    tag: "1.1.0"
+    commit: "56b09aa353b893223384f055546dcbf23f680f98"
+    digest: "sha256:b29ae21d4273402de19cc11a3963ca868aeb88c3ceaa0ce94bc7f220936d399b"
+  - name: foresight
+    repo: micro-foresight
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-foresight
+    tag: "1.3.0"
+    commit: "57ab8ac9e5fd66c5d9236717e7f7843a70766141"
+    digest: "sha256:6c1e1e319322c8d22fee019ed1b1923b58cfed3faf76a7a71c6e3c7f0d26e562"
+  - name: aetherholm
+    repo: micro-aetherholm
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-aetherholm
+    tag: "1.1.0"
+    commit: "07c15a7429ccd967f8264ab50289873f3a66ed09"
+    digest: "sha256:31245ee968cafffecce234b80c0acf045ce6a9ebda344e58a9e2274ca6906be6"
+  - name: tessera
+    repo: micro-tessera
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-tessera
+    tag: "1.2.0"
+    commit: "feae44c749ad3b37d76fe7e3accafab2c9e10990"
+    digest: "sha256:bee85a09fb1aae7e5676cbf8a9ac17191a851a0d2d00e111539e83040652bb19"
+  - name: hub-web
+    repo: micro-hub-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-hub-web
+    tag: "1.1.1"
+    commit: "f448b8d84109193fe500f7de9aac8a59af5a3d04"
+    digest: "sha256:cabe21d3a2a8a91b4247be00e0fec59610894b391295282abe491389db6bdad4"
+  - name: site
+    repo: micro-site
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-site
+    tag: "1.0.2"
+    commit: "db53e73799f440cfb4f36dae64ac431945bbf1df"
+    digest: "sha256:1afcb11c76dd1ae84e68c7592a0e9143293f97a282198f300419718139eba1b7"
+  - name: admin-web
+    repo: micro-admin-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-admin-web
+    tag: "1.2.0"
+    commit: "28fb33addae6352e18d0b45b7bf7785b529b2c29"
+    digest: "sha256:2d73e021f9af27269c7ed95ae86b29ece7a6ee29574a1da9e5e662b91dee7a17"
+  - name: mint-web
+    repo: micro-mint-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-mint-web
+    tag: "1.1.0"
+    commit: "288d5d5aba697c71c73c42aa53998d1797e38adb"
+    digest: "sha256:2a848119a23f4278bee5fcc5332d37c4753209a5a6e3d6640f5d03ccd0d34eb5"
+  - name: trade-web
+    repo: micro-trade-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-trade-web
+    tag: "1.0.0"
+    commit: "3813a34c4a32bc77a19a646ddd992a28c4b7a7f2"
+    digest: "sha256:ee9f8d7798e1ed43a458801bed25ecc588a7c69b25f01ff9dba16894938ffb4e"
+  - name: worlds-web
+    repo: micro-worlds-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-worlds-web
+    tag: "1.0.1"
+    commit: "6be91299cacd5dab1e4a2d031c7e8aa525228d99"
+    digest: "sha256:c5f088567270b6eb13bb394cf8f1394f296b1145e8b81ac0161255dda12594ea"
+  - name: explorer-web
+    repo: micro-explorer-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-explorer-web
+    tag: "1.0.0"
+    commit: "79a84577610c1cb490353a5bdbbc5cb3405fbdf7"
+    digest: "sha256:0980aeb27119dfa2330d0ff6029a10d7320fa582d8eb97689a76952c5dfe2032"
+  - name: network-site
+    repo: micro-network-site
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-network-site
+    tag: "1.0.1"
+    commit: "003d88417833e37fa767aef8c374ffc6b329a0b5"
+    digest: "sha256:a3a04143a692d6d1d5e5390e63334d5e0f8351795fed42aaeb81ecb8b8f3defb"
+  - name: market-web
+    repo: micro-market-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-market-web
+    tag: "1.1.0"
+    commit: "e59e68d4eb61399ab5a29ba38c8fce6dda9861d6"
+    digest: "sha256:63d67e33f26ec3dbcc7937ec461e6de58c0ea0afd48eb411c5656dfaca86259c"
+  - name: devportal-web
+    repo: micro-devportal-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-devportal-web
+    tag: "1.0.0"
+    commit: "2ab1b2cc82215e917a86984d82892e77a866f6f1"
+    digest: "sha256:feb7137be941f8994d586a90ffa2f17f01d8c814ef2caed37ab336005ad799bc"
+  - name: status-web
+    repo: micro-status-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-status-web
+    tag: "1.0.0"
+    commit: "0f3c22bda85b104a86c6d47a47b02ef7e0855dbe"
+    digest: "sha256:4e7650c5ff3be04af587a8b2ebca8ed2dcb3fd50620e4bc99eb646acb019dae0"
+  - name: emberkin-web
+    repo: micro-emberkin-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-emberkin-web
+    tag: "1.0.0"
+    commit: "87ea6a4bb726286f6f26598fe1d87a1f114bd916"
+    digest: "sha256:a9534c8ece1d32f3edd6d0895a397c1f84b576185aafc9d71589afa4e94b7a53"
+  - name: foresight-web
+    repo: micro-foresight-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-foresight-web
+    tag: "1.2.0"
+    commit: "7f56719fd1c59d8b3aaf11e2b2fde55e82972b6b"
+    digest: "sha256:81fe84026ce27a5374c651df0618c1d4f8e498d24efd0455f18ab81e5a6050df"
+  - name: aetherholm-web
+    repo: micro-aetherholm-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-aetherholm-web
+    tag: "1.0.0"
+    commit: "4ebccbd5fd40be03a421c967aa162ab3df675416"
+    digest: "sha256:5efbc26cf3f5cee26df46fb6dc4e6e19363f347cceb5a3ac51cecdcc9bf3f625"
+  - name: tessera-web
+    repo: micro-tessera-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-tessera-web
+    tag: "1.0.0"
+    commit: "e185db895a8c4dada91e69c151a922f42c2924b3"
+    digest: "sha256:d6e92c7b339f500018c0b188e9316140f15165db2a22933855129bcca705d3c0"
+  - name: lantern
+    repo: micro-lantern
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-lantern
+    tag: "1.1.0"
+    commit: "6278a4e9c2188f7047b5163323525b663fe5e217"
+    digest: "sha256:6ede40970119edb39740650a1c2fd7aaf7d69984cf4fa923866cdcba2e3cb23a"
+  - name: beacon
+    repo: micro-beacon
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-beacon
+    tag: "1.1.0"
+    commit: "0411694c2fc9119596e7de9b845f7df6d9356302"
+    digest: "sha256:6440062f031c0e775fc6d1020af4f24ef825129d26d2b10ec631bad405c83fb9"
+  - name: faucet
+    repo: micro-faucet
+    kind: ops
+    image: ghcr.io/cloudsforge-online/micro-faucet
+    tag: "1.1.0"
+    commit: "c7b37f83d86a94fc30968e652ad10e807c07af5b"
+    digest: "sha256:eab38405982a1c62a7fbf5d2da0f54ccc1bc5c0b5cc515fa88dc31904780aad8"
+  - name: lantern-web
+    repo: micro-lantern-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-lantern-web
+    tag: "1.0.0"
+    commit: "601d66b21c14517899cd94a58c6e5b584f36eb7d"
+    digest: "sha256:0560836f697919c269c68b9188fb4901b623a0e8b0a7813ed152cd4e5b415ca0"
+  - name: beacon-web
+    repo: micro-beacon-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-beacon-web
+    tag: "1.0.0"
+    commit: "570508af21e7f7e3eaf9a8ee7bdafcbd96948d3e"
+    digest: "sha256:58aab22a6cc8c899da3f11eabfbdab92b9ada1a0f6b01b04bdd0c9140c1cb06a"
+  - name: pool
+    repo: micro-pool
+    kind: service
+    image: ghcr.io/cloudsforge-online/micro-pool
+    tag: "2.5.19"
+    commit: "8e6772af37f174c80566a5f8b327d1a836d02de1"
+    digest: "sha256:95728591cc67d7b536e03337267255abb138b38ff693d9b9219bca50675f036b"
+  - name: pool-web
+    repo: micro-pool-web
+    kind: web
+    image: ghcr.io/cloudsforge-online/micro-pool-web
+    tag: "2.5.19"
+    commit: "ca80bb4dca965dc72bff5e0809bb4e608f10e8c3"
+    digest: "sha256:295120ff4311ed43f809f02edc814db06bf8e7e4218eb8c925b70abf3516db08"
