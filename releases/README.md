@@ -16,8 +16,10 @@ histories:
 - **Rollback is not expressible.** Setting the variable back moves all fourteen images, including
   the eleven that were fine.
 
-With one repository per service there is no shared version at all. Forty-three repositories have
-forty-three independent histories, and nothing that names one of them can name the others.
+With one repository per service there is no shared version at all. The registry holds **78
+repositories, 67 of them managed** (`tools/registry.ts`) — this paragraph read "forty-three" when
+it was written — and each has its own history, so nothing that names one of them can name the
+others.
 
 ## What replaces it
 
@@ -25,12 +27,12 @@ A **manifest**: a generated file that names exactly which image of each service 
 release. It is the only thing a deployment reads.
 
 ```bash
-cfctl release 2026.08.0            # generate micro/org/releases/2026.08.0.yaml
-cfctl release --verify 2026.08.0   # every image it names actually exists
+cfctl release 2026.08.22           # generate org/releases/2026.08.22.yaml
+cfctl release --verify 2026.08.22   # every image it names actually exists
 ```
 
 ```yaml
-version: "2026.08.0"
+version: "2026.08.22"
 generated: "2026-07-30T09:00:00.000Z"
 generator: cfctl release
 services:
@@ -82,8 +84,14 @@ than as verified: the image exists, and nothing can say it is the image that was
 
 ## The properties this buys
 
-1. **Rollback is checking out the previous manifest.** `git log releases/` is the deployment
-   history, with the diff between any two releases being exactly the set of services that moved.
+1. **Rollback is checking out the previous manifest.** The diff between any two releases is
+   exactly the set of services that moved.
+
+   **But "the previous manifest" is not the previous filename, and it is not `git log releases/`
+   either.** See "Naming, and why a name cannot be sorted" below. This bullet used to say
+   `git log releases/` *is* the deployment history; that is the belief that produced
+   [micro-org#384](https://github.com/cloudsforge-online/micro-org/issues/384). Order by each
+   manifest's `generated` field, or ask `release-deploy.sh --list`.
 2. **A release is reviewable.** A pull request adding `releases/2026.08.1.yaml` shows, in the
    diff, which services changed and which did not.
 3. **A release is verifiable before it is deployed.** `--verify` pulls the manifest for every
@@ -95,8 +103,64 @@ than as verified: the image exists, and nothing can say it is the image that was
    the last one but for a line. That is the whole point of the topology, and `CLOUDSFORGE_TAG`
    could not express it.
 
+## Naming, and why a name cannot be sorted
+
+**A release name is `<year>.<month>.<sequence>`.** `2026.08.21` is the **twenty-first release cut
+in August 2026**, not 21 August — its `generated` field reads `2026-08-11T13:24:18.096Z`. The
+sequence counts releases within the month; it does not track the calendar. `2026.08.1` was cut on
+2026-08-04 and `2026.08.9` on 2026-08-05.
+
+**Never sort these names, and never take "the latest" or "the previous" from a directory listing.**
+Two independent things break it:
+
+- **The sequence is not zero-padded.** `2026.08.21` sorts *before* `2026.08.6` as a string.
+- **This directory holds two incomparable lineages.** `2026.08.1`..`2026.08.11` were cut
+  2026-08-04 to 2026-08-06, each service pinned at its own version. `2.3.0`..`2.5.19` were cut
+  2026-08-07 to 2026-08-11, after "the first manifest that names one version for the whole estate".
+  They are not two branches of one history; they are two answers to the same question, six days
+  apart. No comparison of a date-shaped name with a semver-shaped one means anything.
+
+**Order by `generated`.** It is the only field that orders the two lineages against each other,
+because it records when a human cut the file rather than what they called it.
+
+### micro-org#384, which is why the rules below gained a fourth entry
+
+`2026.08.12` was cut by copying `2026.08.11` and editing three rows. The other 45 were inherited
+unread from a file dated 2026-08-06, and deploying it rolled the estate back from `2.5.19` to the
+2026-08-05 builds — the indexer by **87 commits**.
+
+**Nothing failed.** Every container was healthy. Every image existed. `release-deploy.sh --dry-run`
+was green. Every digest was a real digest of a real artifact. It was found five days later by
+reading `org.opencontainers.image.version` off the running containers and not believing it.
+
+Every guard this estate has around releases asks *is this pin valid*: `--verify` resolves each tag
+at GHCR, `check-release-render-pins-profiles.py` proves the renderer pins by digest,
+`check-provenance-reads-digest-pins.py` proves a running container traces back to one. **A pin six
+days stale passes all three, because it is a completely valid pin.** The question none of them
+asked is *is this pin newer than the one it replaces*, and that is the only question that catches a
+manifest assembled by copy-and-edit.
+
+`test/release-order.test.ts` now asks it, and a decrease is an error rather than a warning. A
+deliberate rollback does not add a manifest — it deploys one that is already here and already
+passed — so cutting a *new* manifest that moves a service backwards is either an intentional
+revert, worth one line in that file's `ACKNOWLEDGED` map naming the issue, or it is #384 happening
+again. There is no third case, and a warning nobody reads is how the first one survived a deploy.
+
 ## Rules
 
+- **A release name is `<year>.<month>.<sequence>`, and it is never sorted.** Order by `generated`.
+  `2026.08.21` is the twenty-first release of August 2026, and `2026.08.21` sorts before
+  `2026.08.6`. See above.
+- **No release may put a service on an older image than the release before it.**
+  `test/release-order.test.ts` fails the build. An intentional revert is an `ACKNOWLEDGED` entry
+  naming the issue, written in the same commit as the manifest — which is the moment to notice you
+  did not mean to.
+- **A manifest is never assembled by copy-and-edit.** `cfctl release` generates it from the state
+  of the repositories. Copying the previous file and editing the rows you meant to move inherits
+  every row you did not look at, and those rows are valid, verifiable and wrong.
+- **`--verify` cannot see a stale pin.** It establishes that an image exists and that a tag still
+  resolves to the recorded digest. It says nothing about whether that digest is current. Do not
+  read a green `--verify` as "this release is up to date".
 - **Manifests are generated, never hand-edited.** `cfctl release` refuses to overwrite one
   without `--force`, because a manifest is the record of what was deployed and rewriting it
   rewrites history.
