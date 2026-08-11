@@ -56,7 +56,7 @@ wrong* was not. Reconstructing it afterwards cost more than filing would have, a
 too — three claims in the reconstruction turned out to be overstated when checked against source,
 including one that was going to be filed as "roughly 15 repositories" and is five.
 
-Four things follow from it:
+Five things follow from it:
 
 1. **Cite the fix commit in the issue, and close the issue in the same session.** A commit message
    is not a tracker entry: it says what was changed, and the useful record is what was *broken*. Nor
@@ -75,9 +75,33 @@ Four things follow from it:
    not in what was written. The Forge Worlds outage was found that way, with every check in front of
    it green, because they all asked whether the page answered and none asked whether the data
    arrived.
+5. **A ticket about mainnet behaviour is closed by a MAINNET measurement, or it is not closed.**
+   Not by a testnet measurement, not by a green CI run, not by a merged diff. Each of those is
+   evidence about a different system from the one the ticket is about, and the estate has now closed
+   tickets on all three:
 
-The three preceding paragraphs are all reconstruction. **The point of this rule is that there should
-never be another one.**
+   | closed on | what it proved | what was still true |
+   | --- | --- | --- |
+   | a **testnet** measurement ([#243](https://github.com/cloudsforge-online/micro-org/issues/243)) | testnet stopped mailing reserved domains | mainnet sent 1,535 more messages over six days and emptied a paid allowance, until a *provider dashboard* said so |
+   | a **CI** run ([#392](https://github.com/cloudsforge-online/micro-org/issues/392)) | the alert file was correct and present in the container | the running Prometheus had never read it — rule files are not `file_sd` — and had been in that state for 22 hours |
+   | a **re-verification sweep** ([#384](https://github.com/cloudsforge-online/micro-org/issues/384)) | the sweep ran | it had run against the wrong network |
+
+   All three are one mistake: **an artefact was verified and a running system was not.** The
+   repository was right in every case, and had been right for days.
+
+   So the evidence in the closing comment names the network, and it is read out of the **running
+   containers and databases** rather than out of a compose file, a manifest or a checkout — the
+   estate runs pinned release images, so a repository on the host and the process on the host are
+   routinely different things (`micro-deploy`'s own release notes say so). Two practical
+   consequences:
+
+   - **Measure after the deploy, not after the merge.** A PR number is not a measurement. If the fix
+     is merged and not yet deployed, say exactly that and leave the ticket open — rule 2.
+   - **A fix that lands on both networks needs a measurement on both.** A mainnet prune proves
+     nothing about testnet, in the same way and for the same reason.
+
+The three paragraphs before this list are all reconstruction, and the table in rule 5 is three more.
+**The point of this rule is that there should never be another one.**
 
 ---
 
