@@ -1668,6 +1668,28 @@ function cmdBump(args: Args): number {
     return undefined;
   };
 
+  /**
+   * Publish this repository's release: the branch first, then the tag.
+   *
+   * That order is the one that survives being interrupted. A pushed branch with no tag is a
+   * published image nobody has named yet, which `cfctl release` still pins correctly and a re-run
+   * repairs. A pushed tag with no branch names a commit the remote does not have.
+   *
+   * BOTH paths through the loop below go through here, and that is the point. Bumping without
+   * `--push`, reading the diffs, and then re-running WITH it is the workflow the no-push summary
+   * line prescribes — and on that second run every repository takes the `already at this version`
+   * path. When that path pushed only the tag, the second run reported success having pushed no
+   * branch, so no image was ever built and `cfctl release` then pinned tags that did not exist.
+   * A local-only `main` is exactly the silent partial this command was written to make impossible.
+   */
+  const publish = (repo: ManagedRepo, dir: string, branch: string): string | undefined => {
+    if (push) {
+      const pushed = gitWrite(repo, dir, ['push', 'origin', branch]);
+      if (!pushed.ok) return `could not push ${branch} — ${pushed.err || pushed.out}`;
+    }
+    return ensureTag(repo, dir);
+  };
+
   for (const repo of repos) {
     const checkout = inspect(repo);
     if (checkout.state === 'absent' || checkout.state === 'not-a-repo') {
@@ -1690,8 +1712,9 @@ function cmdBump(args: Args): number {
       // Re-running after a partial failure is the normal way this is used, so the skip is not a
       // no-op: the tag is what names this release now, and a repository that is at the version
       // without carrying the tag is the silent partial one level along from the one this command
-      // was written to stop.
-      const problem = ensureTag(repo, checkout.dir);
+      // was written to stop. `publish`, not `ensureTag`: the commit may be local-only, and a
+      // version that never reached the remote is a version no image was ever built for.
+      const problem = publish(repo, checkout.dir, checkout.branch);
       if (problem !== undefined) refused.push(`${repo.name}: ${problem}`);
       else already.push(repo.name);
       continue;
@@ -1729,23 +1752,11 @@ function cmdBump(args: Args): number {
       continue;
     }
 
-    // The branch first, then the tag. That order is the one that survives being interrupted: a
-    // pushed branch with no tag is a published image nobody has named yet, which `cfctl release`
-    // still pins correctly and a re-run repairs. A pushed tag with no branch names a commit the
-    // remote does not have.
-    if (push) {
-      const pushed = gitWrite(repo, checkout.dir, ['push', 'origin', checkout.branch]);
-      if (!pushed.ok) {
-        refused.push(
-          `${repo.name}: committed ${current} → ${version} on ${checkout.branch}, but the push ` +
-            `failed — ${pushed.err || pushed.out}`,
-        );
-        continue;
-      }
-    }
-    const problem = ensureTag(repo, checkout.dir);
+    // The branch first, then the tag — see `publish`, which both paths share so that neither can
+    // drift into publishing half of what the other does.
+    const problem = publish(repo, checkout.dir, checkout.branch);
     if (problem !== undefined) {
-      refused.push(`${repo.name}: committed ${current} → ${version}, but ${problem}`);
+      refused.push(`${repo.name}: committed ${current} → ${version} on ${checkout.branch}, but ${problem}`);
       continue;
     }
     bumped.push(`${repo.name} ${current} → ${version}`);
@@ -1779,9 +1790,12 @@ function cmdBump(args: Args): number {
     );
     return 0;
   }
+  // bumped + already, not bumped: on the second run of the documented two-step both numbers are
+  // real pushes, and reporting only the first printed "pushed in 0 repositories" immediately after
+  // pushing forty-eight of them.
   process.stdout.write(
-    `\nmain and ${tag} are pushed in ${bumped.length} repositories. Each push to main publishes an ` +
-      `image tagged ${version}.\nWhen those builds are green:  cfctl release ${version}\n`,
+    `\nmain and ${tag} are pushed in ${bumped.length + already.length} repositories. Each push to ` +
+      `main publishes an image tagged ${version}.\nWhen those builds are green:  cfctl release ${version}\n`,
   );
   return 0;
 }
