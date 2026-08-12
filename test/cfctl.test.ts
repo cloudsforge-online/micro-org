@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { blankComments } from '../.github/actions/source-scan/source-scan.mjs';
 import {
   compareDotted,
   digestVerdict,
@@ -910,4 +911,56 @@ test('rewriteVersionText refuses when the first "version" line is not the parsed
 
   // And a file with no version at all is refused rather than treated as an empty one.
   assert.equal(rewriteVersionText('{ "name": "micro-thing" }\n', '2.5.7', '2.5.8').ok, false);
+});
+
+// -- bump does not create a branch (micro-org#422) -----------------------------------------------
+//
+// `cmdBump` is not exported and cannot be: it walks the real registry and writes to real sibling
+// checkouts, so calling it in a test would bump the estate. What CAN be asserted is the shape of
+// the git it runs, and the shape is the whole of micro-org#422 — a release branch that has to be
+// merged back is a release branch that will not be, and forty-four repositories proved it.
+
+function bumpSource(): string {
+  const orgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const source = readFileSync(path.join(orgRoot, 'tools/cfctl.ts'), 'utf8');
+  const start = source.indexOf('function cmdBump(');
+  const end = source.indexOf('function cmdRelease(');
+  assert.ok(start > 0 && end > start, 'cmdBump and cmdRelease must both still be in cfctl.ts');
+  // Comments are blanked before matching. This file argues for the design it implements, so every
+  // phrase this test looks for also appears in prose a few lines above the code — and a test that
+  // a comment satisfies is a test that survives the code being deleted.
+  return blankComments(source.slice(start, end));
+}
+
+test('bump commits the version on main and never cuts a release branch', () => {
+  const bump = bumpSource();
+
+  // The two ways the old implementation reached the branch. Either one coming back re-opens #422.
+  assert.ok(!bump.includes("'checkout'"), 'cmdBump must not check out anything');
+  assert.ok(!bump.includes("'-b'"), 'cmdBump must not create a branch');
+
+  // What it pushes is the branch the operator is standing on, which the refusal above pins to
+  // `main`. Pushing a literal would silently ignore --any-branch.
+  assert.ok(bump.includes("['push', 'origin', checkout.branch]"));
+  assert.ok(bump.includes("checkout.branch !== 'main'"));
+});
+
+test('the release is named by an annotated tag, referred to by its full ref', () => {
+  const bump = bumpSource();
+
+  // Annotated, not lightweight: a lightweight tag carries no tagger, no date and no message, so
+  // `release/<v>` would answer "which commit" and nothing about who cut it or when.
+  assert.ok(bump.includes("['tag', '-a', tag, '-m', message]"));
+
+  // Fully qualified on every side. A repository that still carries the historical
+  // `release/<version>` BRANCH makes the bare name ambiguous, and git resolves it to the branch —
+  // so an unqualified read would compare HEAD against a branch tip and an unqualified push would
+  // push the branch. Both are the failure this change exists to remove.
+  assert.ok(bump.includes('const tagRef = `refs/tags/${tag}`'));
+  assert.ok(bump.includes("`${tagRef}^{commit}`"));
+  assert.ok(bump.includes("['push', 'origin', tagRef]"));
+
+  // The tag is checked before it is written, and a tag that already names a DIFFERENT commit is a
+  // refusal rather than a `--force`. Moving it would make the release name mutable again.
+  assert.ok(!bump.includes("'-f'") && !bump.includes("'--force'"));
 });
