@@ -8,7 +8,7 @@
 //                                  if I merge here', asked before the merge instead of after
 //   cfctl cross --json             the same edges as data, for the workflow that runs the sweep
 //                                  when an upstream merges (.github/workflows/cross-repo.yml)
-//   cfctl bump <version>           move every deployable to one version on a release/<v> branch
+//   cfctl bump <version>           move every deployable to one version, on main, tagged release/<v>
 //   cfctl release <version>        generate releases/<version>.yaml, one image per service
 //   cfctl release --verify <v>     check every image exists and is still the image that was pinned
 //   cfctl clients [--verify]       what is in front of users for the three wallet clients — the
@@ -594,6 +594,9 @@ function ghcrVisibility(repo: Repo): 'public' | 'private-or-absent' | 'unknown' 
 //   * `publish-image.yml` tags at the repository's package.json version on every push to `main` or
 //     `release/**`. If a `release/X` branch is never merged, `main` stays on the PREVIOUS version,
 //     so the next merge to main republishes the PREVIOUS release's tag from a different commit.
+//     That is micro-org#422, and `cfctl bump` no longer creates the branch that caused it — the
+//     version bump lands on `main` and the release is named by a TAG. `release/**` stays in
+//     publish-image's trigger because the branches that already exist must keep working.
 //     Six repositories did exactly this with 2.5.6, measured 2026-08-09:
 //     `ghcr.io/cloudsforge-online/micro-network-site:2.5.5` resolves to the image built from
 //     `5aa61e4`, a merge that landed after 2.5.5 was cut.
@@ -1502,8 +1505,8 @@ function releasesDir(): string {
 // `cfctl release` records what the tags resolve to. It does not CREATE them, and the thing that
 // does is a version bump in every deployable's package.json, because `publish-image.yml` tags the
 // image with `require('./package.json').version` and never moves a tag it has already published.
-// So "cut 2.5.8" means: forty-eight package.json edits, forty-eight commits, forty-eight branches,
-// forty-eight pushes — and then a manifest.
+// So "cut 2.5.8" means: forty-eight package.json edits, forty-eight commits, forty-eight pushes —
+// and then a manifest.
 //
 // 2.5.7 was done by hand. That is why this exists. The failure mode of doing it by hand is not
 // tedium, it is a SILENT PARTIAL: one repository missed, its image never publishes 2.5.8, and
@@ -1527,6 +1530,37 @@ function releasesDir(): string {
 //
 // Pushing is opt-in (`--push`). Forty-eight pushes start forty-eight image builds, and that is a
 // thing to do on purpose rather than as the default behaviour of a command that also edits files.
+//
+// ── ON MAIN, NAMED BY A TAG, NOT ON A BRANCH (micro-org#422) ───────────────────────────────────
+//
+// This used to cut `release/<version>` in every repository. Forty-eight branches then had to be
+// merged back, and they never were: forty-four repositories carry `release/2026.08.22` and older,
+// `main` sits a release behind the images the estate runs, and the NEXT merge to main republishes
+// the previous version's tag from a commit that version was never built from. The branch is not
+// where the release lives — the image tag is — so the branch was a second, mutable, always-drifting
+// record of a thing that already had a name.
+//
+// So the bump commits to `main` and creates an ANNOTATED TAG `release/<version>` at that commit.
+// Three properties fall out, and each was a failure of the branch scheme:
+//
+//   * `main` is the released version. There is nothing to merge, so there is nothing to forget to
+//     merge, and the drift micro-org#288 measured cannot open at all.
+//   * a tag does not move. A branch tip does — `release/2.5.7` in a repository someone pushed a fix
+//     to no longer names what 2.5.7 was built from, which is the same defect as a floating image
+//     tag, one level up.
+//   * the tag does not trigger anything. Each repository's `ci.yml` fires on pushes to BRANCHES, so
+//     the publish is the push to `main` and the tag is pure record. A tag that also built would be
+//     a second builder of the same version, and `publish-image.yml` will not republish a version
+//     that already resolves — the second build's green tick would mean "already published".
+//
+// A tag and a branch of the same name coexist (`refs/tags/release/X` is not `refs/heads/release/X`),
+// so the historical branches do not have to be deleted before this is used. `git rev-parse` becomes
+// ambiguous between them, which is why every reference to the tag here is fully qualified.
+//
+// The cost is that a release commit does not go through a pull request. It is a one-line
+// machine-written edit to a field whose value came from the command line, made in forty-eight
+// repositories at once; a reviewer adds nothing a `--dry-run` does not, and the review that matters
+// — of the code being released — happened when that code merged.
 
 /** Numeric compare of dotted versions. Returns <0, 0 or >0. Non-numeric segments sort as -1. */
 export function compareDotted(a: string, b: string): number {
@@ -1595,7 +1629,8 @@ function cmdBump(args: Args): number {
     return 2;
   }
   const notes = notesFile === undefined ? '' : readFileSync(notesFile, 'utf8').trim();
-  const branch = `release/${version}`;
+  const tag = `release/${version}`;
+  const tagRef = `refs/tags/${tag}`;
   const push = args.flag('push');
 
   const only = args.option('only');
@@ -1606,6 +1641,32 @@ function cmdBump(args: Args): number {
   const already: string[] = [];
   const absent: string[] = [];
   const refused: string[] = [];
+
+  /**
+   * Put `tag` on HEAD, or agree that it is already there.
+   *
+   * Returns an error string, or `undefined` when the tag names this commit. Fully qualified on
+   * both sides: a repository that still carries the historical `release/<version>` BRANCH would
+   * otherwise make `git rev-parse release/<version>` ambiguous, and the branch is the answer git
+   * prefers.
+   */
+  const ensureTag = (repo: ManagedRepo, dir: string): string | undefined => {
+    const head = git(dir, ['rev-parse', 'HEAD']);
+    if (!head.ok) return `could not read HEAD — ${head.err}`;
+    const existing = git(dir, ['rev-parse', '--verify', '--quiet', `${tagRef}^{commit}`]);
+    if (existing.ok && existing.out !== head.out) {
+      return `${tag} already exists and names ${existing.out.slice(0, 12)}, not ${head.out.slice(0, 12)}`;
+    }
+    if (!existing.ok) {
+      const message = notes === '' ? `release: ${version}` : `release: ${version}\n\n${notes}`;
+      const made = gitWrite(repo, dir, ['tag', '-a', tag, '-m', message]);
+      if (!made.ok) return `could not tag ${tag} — ${made.err || made.out}`;
+    }
+    if (!push) return undefined;
+    const pushed = gitWrite(repo, dir, ['push', 'origin', tagRef]);
+    if (!pushed.ok) return `could not push ${tag} — ${pushed.err || pushed.out}`;
+    return undefined;
+  };
 
   for (const repo of repos) {
     const checkout = inspect(repo);
@@ -1626,7 +1687,13 @@ function cmdBump(args: Args): number {
       continue;
     }
     if (current === version) {
-      already.push(repo.name);
+      // Re-running after a partial failure is the normal way this is used, so the skip is not a
+      // no-op: the tag is what names this release now, and a repository that is at the version
+      // without carrying the tag is the silent partial one level along from the one this command
+      // was written to stop.
+      const problem = ensureTag(repo, checkout.dir);
+      if (problem !== undefined) refused.push(`${repo.name}: ${problem}`);
+      else already.push(repo.name);
       continue;
     }
     if (compareDotted(version, current) <= 0) {
@@ -1634,21 +1701,15 @@ function cmdBump(args: Args): number {
       continue;
     }
 
-    // The branch is made from wherever the checkout is, and the checkout is expected to be `main`.
-    // Saying so out loud rather than forcing it: a release cut from a feature branch is a real
-    // thing an operator sometimes wants (a rehearsal), and a tool that silently checks out `main`
-    // would discard the branch they were standing on to get it.
+    // The commit lands on whatever branch the checkout is standing on, and that is expected to be
+    // `main`. Saying so out loud rather than forcing it: a release rehearsed from a feature branch
+    // is a real thing an operator sometimes wants, and a tool that silently checks out `main` would
+    // discard the branch they were standing on to get it. Since micro-org#422 this is the branch
+    // that gets PUSHED, so the refusal matters more than it did when it only chose a fork point.
     if (checkout.branch !== 'main' && !args.flag('any-branch')) {
       refused.push(
         `${repo.name}: is on ${checkout.branch}, not main — pass --any-branch if that is deliberate`,
       );
-      continue;
-    }
-
-    const exists = git(checkout.dir, ['rev-parse', '--verify', branch]).ok;
-    const switched = gitWrite(repo, checkout.dir, exists ? ['checkout', branch] : ['checkout', '-b', branch]);
-    if (!switched.ok) {
-      refused.push(`${repo.name}: could not reach ${branch} — ${switched.err}`);
       continue;
     }
 
@@ -1668,18 +1729,30 @@ function cmdBump(args: Args): number {
       continue;
     }
 
+    // The branch first, then the tag. That order is the one that survives being interrupted: a
+    // pushed branch with no tag is a published image nobody has named yet, which `cfctl release`
+    // still pins correctly and a re-run repairs. A pushed tag with no branch names a commit the
+    // remote does not have.
     if (push) {
-      const pushed = gitWrite(repo, checkout.dir, ['push', '-u', 'origin', branch]);
+      const pushed = gitWrite(repo, checkout.dir, ['push', 'origin', checkout.branch]);
       if (!pushed.ok) {
-        refused.push(`${repo.name}: committed ${current} → ${version}, but the push failed — ${pushed.err}`);
+        refused.push(
+          `${repo.name}: committed ${current} → ${version} on ${checkout.branch}, but the push ` +
+            `failed — ${pushed.err || pushed.out}`,
+        );
         continue;
       }
+    }
+    const problem = ensureTag(repo, checkout.dir);
+    if (problem !== undefined) {
+      refused.push(`${repo.name}: committed ${current} → ${version}, but ${problem}`);
+      continue;
     }
     bumped.push(`${repo.name} ${current} → ${version}`);
   }
 
   for (const line of bumped) process.stdout.write(`  bumped   ${line}\n`);
-  for (const name of already) process.stdout.write(`  already  ${name} is ${version}\n`);
+  for (const name of already) process.stdout.write(`  already  ${name} is ${version}, tagged ${tag}\n`);
   for (const name of absent) process.stdout.write(`  absent   ${name}\n`);
   for (const line of refused) process.stdout.write(`  REFUSED  ${line}\n`);
 
@@ -1700,12 +1773,15 @@ function cmdBump(args: Args): number {
     return 1;
   }
   if (!push) {
-    process.stdout.write(`\nnothing was pushed. When the branches look right:  cfctl bump ${version} --push\n`);
+    process.stdout.write(
+      `\nnothing was pushed — the commits and the ${tag} tags are local. When the diffs look right:` +
+        `  cfctl bump ${version} --push\n`,
+    );
     return 0;
   }
   process.stdout.write(
-    `\n${branch} is pushed in ${bumped.length} repositories. Each push publishes an image tagged ` +
-      `${version}.\nWhen those builds are green and the branches are merged:  cfctl release ${version}\n`,
+    `\nmain and ${tag} are pushed in ${bumped.length} repositories. Each push to main publishes an ` +
+      `image tagged ${version}.\nWhen those builds are green:  cfctl release ${version}\n`,
   );
   return 0;
 }
