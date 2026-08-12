@@ -941,8 +941,29 @@ test('bump commits the version on main and never cuts a release branch', () => {
 
   // What it pushes is the branch the operator is standing on, which the refusal above pins to
   // `main`. Pushing a literal would silently ignore --any-branch.
-  assert.ok(bump.includes("['push', 'origin', checkout.branch]"));
+  assert.ok(bump.includes("['push', 'origin', branch]"));
+  assert.ok(bump.includes('publish(repo, checkout.dir, checkout.branch)'));
   assert.ok(bump.includes("checkout.branch !== 'main'"));
+});
+
+test('a re-run over already-bumped repositories pushes the branch, not only the tag', () => {
+  const bump = bumpSource();
+
+  // The documented workflow is `bump`, read the diffs, then `bump --push`. On that second run
+  // every repository is ALREADY at the version, so it takes the short path — and when that path
+  // pushed only the tag, the run reported success having left `main` local in all forty-eight.
+  // No push to main, no image built, and `cfctl release` then pins tags that do not exist.
+  //
+  // Asserted structurally: both paths must reach the remote through the SAME helper, so neither
+  // can be extended without the other. Two call sites, one `publish`.
+  const calls = bump.match(/publish\(repo, checkout\.dir, checkout\.branch\)/g) ?? [];
+  assert.equal(calls.length, 2, 'both the already-at-version path and the fresh bump must publish');
+  assert.ok(!bump.includes('ensureTag(repo, checkout.dir)'), 'no path may tag without pushing main');
+
+  // And the order inside it stays branch-then-tag: a tag pushed before its commit names something
+  // the remote does not have.
+  const helper = bump.slice(bump.indexOf('const publish ='));
+  assert.ok(helper.indexOf("['push', 'origin', branch]") < helper.indexOf('ensureTag(repo, dir)'));
 });
 
 test('the release is named by an annotated tag, referred to by its full ref', () => {
