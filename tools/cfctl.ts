@@ -1790,9 +1790,12 @@ function cmdBump(args: Args): number {
     );
     return 0;
   }
+  // bumped + already, not bumped: on the second run of the documented two-step both numbers are
+  // real pushes, and reporting only the first printed "pushed in 0 repositories" immediately after
+  // pushing forty-eight of them.
   process.stdout.write(
-    `\nmain and ${tag} are pushed in ${bumped.length} repositories. Each push to main publishes an ` +
-      `image tagged ${version}.\nWhen those builds are green:  cfctl release ${version}\n`,
+    `\nmain and ${tag} are pushed in ${bumped.length + already.length} repositories. Each push to ` +
+      `main publishes an image tagged ${version}.\nWhen those builds are green:  cfctl release ${version}\n`,
   );
   return 0;
 }
