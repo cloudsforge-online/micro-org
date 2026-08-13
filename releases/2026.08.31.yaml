@@ -8,7 +8,7 @@
 # see micro-org#288. Verify with `cfctl release --verify`; an entry with no digest predates
 # 2026-08-09 or was cut before its image published, and cannot be verified at all.
 version: "2026.08.31"
-generated: "2026-08-13T02:34:27.757Z"
+generated: "2026-08-13T03:00:52.743Z"
 generator: cfctl release
 services:
   - name: identity
@@ -59,12 +59,14 @@ services:
     image: ghcr.io/cloudsforge-online/micro-billing
     tag: "2026.08.31"
     commit: "992c1af4657a27eff73dc6dfd7071b8789ca2a04"
+    digest: "sha256:3b364cfcbfe177429b8afbe558455e93b324e6df24a730b870b42285ceee1e0e"
   - name: custody
     repo: micro-custody
     kind: service
     image: ghcr.io/cloudsforge-online/micro-custody
     tag: "2026.08.31"
     commit: "3278d16a0c4b69f0697f4a37c2e3933cd33bcb21"
+    digest: "sha256:e526e91998d31c8703639adf1160d1306ed1ad5ce90ccf03937f48a02d2fd633"
   - name: indexer
     repo: micro-indexer
     kind: service
@@ -85,6 +87,7 @@ services:
     image: ghcr.io/cloudsforge-online/micro-notify
     tag: "2026.08.31"
     commit: "9ab975a5b34f71babb5930b088b30cd17d0679f0"
+    digest: "sha256:c9c967b8759709afce243cc2a279c8f6f75cbc1134a43f361e23a9ab5cf5d4d1"
   - name: studio
     repo: micro-studio
     kind: service
@@ -98,18 +101,21 @@ services:
     image: ghcr.io/cloudsforge-online/micro-mint
     tag: "2026.08.31"
     commit: "131dceed072abbfff9627c17d223ec71c4af2780"
+    digest: "sha256:e1e87ada434d33847bc833949dc72d743cc0857c526dd85db01777a1a74255aa"
   - name: market
     repo: micro-market
     kind: service
     image: ghcr.io/cloudsforge-online/micro-market
     tag: "2026.08.31"
     commit: "dfb720c62e5bd53ddbce9ce9a3986b8506645d36"
+    digest: "sha256:fd700601ceb38062a8c2b481136b9a97d737cf8e73389d8a322baaeef4197489"
   - name: trade
     repo: micro-trade
     kind: service
     image: ghcr.io/cloudsforge-online/micro-trade
     tag: "2026.08.31"
     commit: "1890b1498a36a7170db908da474679f0aeae2bf3"
+    digest: "sha256:8e201bd153a9b8fffdc874801fe89c1ed51f34aaa66b3a5dcfdbe10747b88438"
   - name: worlds
     repo: micro-worlds
     kind: service
@@ -123,192 +129,224 @@ services:
     image: ghcr.io/cloudsforge-online/micro-nda
     tag: "2026.08.31"
     commit: "35639d811f04d235965696504d554e204699f73e"
+    digest: "sha256:e30483c68204324fdc98639428877a3e6c2e9591c33d04472d88350a98d4d2a2"
   - name: community
     repo: micro-community
     kind: service
     image: ghcr.io/cloudsforge-online/micro-community
     tag: "2026.08.31"
     commit: "3eba5785e2e51f27e680edaf09c2a2e116a9ec04"
+    digest: "sha256:0175b2ac67abd4b9a066d2ae54c02b3feed96b6e2f1276236bd8580288afd552"
   - name: devplatform
     repo: micro-devplatform
     kind: service
     image: ghcr.io/cloudsforge-online/micro-devplatform
     tag: "2026.08.31"
     commit: "52904849ef4caab93d92b7986ae9d14dae07de47"
+    digest: "sha256:6f9b511d32e253e05dc31bd77102dfbcb951e653434a455acf2e8a7c99c32637"
   - name: hub-api
     repo: micro-hub-api
     kind: service
     image: ghcr.io/cloudsforge-online/micro-hub-api
     tag: "2026.08.31"
     commit: "8c2ddd1c80e93f401c87f7fd8d85e7aedd613407"
+    digest: "sha256:04172951b48064ec8c55c0d7d1850307b7101489ab2dd5b20807c8291ee38e0d"
   - name: admin-api
     repo: micro-admin-api
     kind: service
     image: ghcr.io/cloudsforge-online/micro-admin-api
     tag: "2026.08.31"
     commit: "d1e08412ca2f19f3013a92be83962a7fef6849cc"
+    digest: "sha256:4b2feae62ab9c35763be1f4a47730c29ac50960896d2e913ab8fdca562e3c69c"
   - name: analytics
     repo: micro-analytics
     kind: service
     image: ghcr.io/cloudsforge-online/micro-analytics
     tag: "2026.08.31"
     commit: "0ebac6ab80095f58784d558b5fdb325acf45c5c4"
+    digest: "sha256:0b5a85aea98950bf82f562070307b4dc123ffb3d9b968207b77a73ebef615220"
   - name: emberkin
     repo: micro-emberkin
     kind: service
     image: ghcr.io/cloudsforge-online/micro-emberkin
     tag: "2026.08.31"
     commit: "4f01e01414f3dbff6a835348f462db6b57e0b47d"
+    digest: "sha256:ae4aaddd34fad69d0286eb2ef47bc3bf95f92fa0be96c1caa9c2e9e4d100476b"
   - name: foresight
     repo: micro-foresight
     kind: service
     image: ghcr.io/cloudsforge-online/micro-foresight
     tag: "2026.08.31"
     commit: "436f953debb63b731cf064fd00f8df80253112ff"
+    digest: "sha256:bf5b07575371f02e4f6c03a9639aaa6d69a495368fe890ee31c2f3b4fdedc41f"
   - name: aetherholm
     repo: micro-aetherholm
     kind: service
     image: ghcr.io/cloudsforge-online/micro-aetherholm
     tag: "2026.08.31"
     commit: "7619464a9be7479151d35a509d3fdac3bc5dd72f"
+    digest: "sha256:81ff982cb533204cb31e8873737afa33c75b64a29d7109eabfe9a19904a92c5b"
   - name: tessera
     repo: micro-tessera
     kind: service
     image: ghcr.io/cloudsforge-online/micro-tessera
     tag: "2026.08.31"
     commit: "173592f8884cc6f164f0b274b16f5ac001ba2df0"
+    digest: "sha256:29338357b589d9e1121a6fce67a7cd30d507a12be57c4196f7aa4bcc6a6a3f39"
   - name: hub-web
     repo: micro-hub-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-hub-web
     tag: "2026.08.31"
     commit: "1df8508fde3bb14a6e6a02ca5396c27b56547733"
+    digest: "sha256:866510edae718ed43161b1dfa9fe3561011573b2df665419dacb160df128d508"
   - name: site
     repo: micro-site
     kind: web
     image: ghcr.io/cloudsforge-online/micro-site
     tag: "2026.08.31"
     commit: "2f5a7d0a348361f3995d90ad58ca802fb39a0242"
+    digest: "sha256:5d5fb93f415118e1787aec533c3bbaada63e981638822c7e5b2fbe74786cb13f"
   - name: admin-web
     repo: micro-admin-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-admin-web
     tag: "2026.08.31"
     commit: "0b5d2f3fa6e6492ecdfb433b3c7de3dc532e2c3c"
+    digest: "sha256:760604155f7dfe090fed553cba3a982955e9c80cdce08b1e07a63b1897c4cab3"
   - name: mint-web
     repo: micro-mint-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-mint-web
     tag: "2026.08.31"
     commit: "b97c6f23d9af5ce805c37ed38de56f66d5799117"
+    digest: "sha256:b4d8698aebcfb80c317789a0f5681923e027ff96ae8bb649a774aa2b5bf18d6a"
   - name: trade-web
     repo: micro-trade-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-trade-web
     tag: "2026.08.31"
     commit: "d568fb44894f8f73b7e6d42e6931d007dc4ba517"
+    digest: "sha256:8b0410c9ab2eee0a2e3e0475a65d70929a17210adbf6053be030fd84d96857be"
   - name: worlds-web
     repo: micro-worlds-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-worlds-web
     tag: "2026.08.31"
     commit: "59bcdee4f9b25bf0f4ebbaf6707b1805931d81bf"
+    digest: "sha256:64d42ecc330338b45da8fbd1b02f512f9c08f3f6ebd438558278f409f9e74f49"
   - name: explorer-web
     repo: micro-explorer-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-explorer-web
     tag: "2026.08.31"
     commit: "11dc31666ca4476eb0ef4ab905f9d8b8d7c32eb1"
+    digest: "sha256:7bd078403ad652b08edca2cca4953a1762a22257c802e86a6a8b7b9f57254844"
   - name: network-site
     repo: micro-network-site
     kind: web
     image: ghcr.io/cloudsforge-online/micro-network-site
     tag: "2026.08.31"
     commit: "f40d90e129719ef6b1dde05087c7546952dd037f"
+    digest: "sha256:3147eaec8716e29609101bfa5821f558371fbef6448837d9eeb9b1506986c576"
   - name: market-web
     repo: micro-market-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-market-web
     tag: "2026.08.31"
     commit: "eef0a6e773372257fb38956bf2bff9d197185531"
+    digest: "sha256:270fc311cf054b2f8243b6bf14045a0850a48da8aef4b763533a666f87ba31b0"
   - name: devportal-web
     repo: micro-devportal-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-devportal-web
     tag: "2026.08.31"
     commit: "bb2029e1df73dc1df1cc31787cff1e2a5d5370d4"
+    digest: "sha256:75ac3e3591f4c08a4e6c8878206493b69182a2a659b71e57fe893d0bcc4c5e23"
   - name: status-web
     repo: micro-status-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-status-web
     tag: "2026.08.31"
     commit: "86be161a2ff46a5f4e0ff97115a60b21a7d403ee"
+    digest: "sha256:517b40dfea61dc5301ba3d200821e514b75b4fe9174b001356782aabd6a18c66"
   - name: emberkin-web
     repo: micro-emberkin-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-emberkin-web
     tag: "2026.08.31"
     commit: "cfd4b4c0a46d45f8e3614513197dba34bc7fb8d6"
+    digest: "sha256:379cdb1aa1233971b6a8dcd065b85f3af6df850e95960ce879069bfbf2c34e93"
   - name: foresight-web
     repo: micro-foresight-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-foresight-web
     tag: "2026.08.31"
     commit: "e7409db82cfaeea50579bd802256aab534b020d0"
+    digest: "sha256:f5e75682955da0ad66b3f26885552d41766fde8db872e15b3a1972a2eff9f28a"
   - name: aetherholm-web
     repo: micro-aetherholm-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-aetherholm-web
     tag: "2026.08.31"
     commit: "1daabcb5a1619d87a7dadb27cef89ce773e6833b"
+    digest: "sha256:5bb10d298972309708791c394c0cd8746aa0e00cf97b626d9fbc61d236cc4ea2"
   - name: tessera-web
     repo: micro-tessera-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-tessera-web
     tag: "2026.08.31"
     commit: "3a00dea3fa6c136f18f5ceac632d995e6706ee47"
+    digest: "sha256:38dfcdf4be9d6c20d39e7effdcbbf7cea6734578599b6722082f9cd96d9a0908"
   - name: lantern
     repo: micro-lantern
     kind: ops
     image: ghcr.io/cloudsforge-online/micro-lantern
     tag: "2026.08.31"
     commit: "072c73213d1ab2873743e5f132818f8a7b651d43"
+    digest: "sha256:0e2adc6e12a3b25df0e0c6e5372f31f30c883b9fcb325acd17d85092ea996973"
   - name: beacon
     repo: micro-beacon
     kind: ops
     image: ghcr.io/cloudsforge-online/micro-beacon
     tag: "2026.08.31"
     commit: "b49403fad8cd452c6529d4931e577ec967bd628d"
+    digest: "sha256:ccafc8c47e3f1e301153c1608a07d727d60b00796ad4d1b1ee745e6ee0d3d31c"
   - name: faucet
     repo: micro-faucet
     kind: ops
     image: ghcr.io/cloudsforge-online/micro-faucet
     tag: "2026.08.31"
     commit: "61a731a6346e0ae78763481bca2bae8e5649d37b"
+    digest: "sha256:f1b979e0f50d72ab078dec83d01e7afddd22054eedf21b73240d4d0b0b334481"
   - name: lantern-web
     repo: micro-lantern-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-lantern-web
     tag: "2026.08.31"
     commit: "738e14bb9a35922757ac2428b87e182576732327"
+    digest: "sha256:ab4f548fdaeadd0b6841a5d3ed51c6a857b0c18bc831085b0cc251dc510e06c7"
   - name: beacon-web
     repo: micro-beacon-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-beacon-web
     tag: "2026.08.31"
     commit: "69e0f5fe4aecc26803741ef0e145038085356ef6"
+    digest: "sha256:d48f2e2e37108f0ce78fcd812864eb78555cfd1593cfd0f5a13b5762af8fe6ad"
   - name: pool
     repo: micro-pool
     kind: service
     image: ghcr.io/cloudsforge-online/micro-pool
     tag: "2026.08.31"
     commit: "0d7badd15a4d4e10443a4efd23b41bc3dd0088de"
+    digest: "sha256:0dbd692e5fd1f20cd2bdf4fa93e4908732c92c8c72c6dcec58b1d38c5a5a00a8"
   - name: pool-web
     repo: micro-pool-web
     kind: web
     image: ghcr.io/cloudsforge-online/micro-pool-web
     tag: "2026.08.31"
     commit: "24031f6fe85bc1e3fce6aa14d98a4be1b86ebfcb"
+    digest: "sha256:78993f089dcb07172d5772be6a6c39362d96faa813cef4264703827c0de11de0"
 # Deployables with no checkout on the machine that generated this. Listed rather than
 # omitted: a manifest with a silent hole is how a service gets left on an old image.
 absent:
