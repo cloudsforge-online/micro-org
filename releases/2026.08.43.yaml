@@ -172,12 +172,31 @@ services:
     tag: "2026.08.43"
     commit: "111ecf64ec81a8e6a0140e104c313a106710df08"
     digest: "sha256:b8dfceb15edadf72bdb77981c45c096214c3a8e7748883e6831ec14a28009b33"
+  # ── THIS ONE DIGEST WAS RESOLVED AFTER THE CUT, AND THAT IS RECORDED RATHER THAN TIDIED ──────
+  #
+  # `cfctl release` resolves every digest at cut time. This entry got none: the manifest was
+  # written at 18:51Z on 2026-08-14 and micro-foresight's publish job had not pushed the tag yet,
+  # which is the case the header above names ("cut before its image published"). It published
+  # afterwards, so this release was deployed and rolled forward from a manifest that pinned a
+  # MUTABLE NAME for one of its 48 services — the exact thing micro-org#288 exists about.
+  #
+  # Filled in on 2026-08-16, and verified as the artifact THIS release produced rather than
+  # whatever the tag points at today: `ghcr.io/cloudsforge-online/micro-foresight:2026.08.43`
+  # resolves to the digest below, an OCI index whose amd64 image config carries
+  # `org.opencontainers.image.revision = 3befdd6ac555c67e0c5f6c6e32a075d5ee23f875` — byte for byte
+  # the commit this entry already pinned. So this is not a new claim; it is the same claim, named
+  # by something that cannot be moved.
+  #
+  # Hand-edited against the file's own "do not hand-edit", deliberately: the generator resolves
+  # digests only at cut time and has no repair path, and the alternative is a permanent hole in a
+  # historical record that `cfctl release --verify` reports as unverifiable forever.
   - name: foresight
     repo: micro-foresight
     kind: service
     image: ghcr.io/cloudsforge-online/micro-foresight
     tag: "2026.08.43"
     commit: "3befdd6ac555c67e0c5f6c6e32a075d5ee23f875"
+    digest: "sha256:b99e6f0f21e8243ece609469fafc6e8931589ab6fafc320c9a0a01e6ce550a26"
   - name: aetherholm
     repo: micro-aetherholm
     kind: service
