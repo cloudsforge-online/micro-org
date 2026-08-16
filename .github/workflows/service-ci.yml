@@ -172,6 +172,21 @@ jobs:
           repository: cloudsforge-online/micro-contracts
           path: contracts
           token: ${{ secrets.estate_token || github.token }}
+      # The third sibling, and it is here for the same defect as the two above rather than a new
+      # one. micro-beacon takes `@cloudsforge/hearth-wallet-core` as a `link:` because BJ-DEX-02
+      # signs a real swap in a browser with no wallet extension, and a second hand-written copy of
+      # secp256k1 and legacy RLP is the failure 25-wallet-clients.md section 3 names. Without this
+      # checkout that link dangles, `Install` passes, and `Typecheck` fails on a module that is
+      # right there in the repository next door.
+      #
+      # No install step below, unlike runtime and contracts: this package has NO DEPENDENCIES OF
+      # ITS OWN, so there is no sibling node_modules for the link to resolve into. That is also why
+      # micro-beacon's Dockerfile copies two paths from it rather than running pnpm in it.
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-hearth-wallet-core
+          path: hearth-wallet-core
+          token: ${{ secrets.estate_token || github.token }}
       - uses: pnpm/action-setup@v4
         if: inputs.package-manager == 'pnpm'
         with:
