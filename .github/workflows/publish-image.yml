@@ -210,6 +210,21 @@ jobs:
           repository: cloudsforge-online/micro-contracts
           path: contracts-ctx
           token: ${{ secrets.estate_token || github.token }}
+      # THE SIGNER, CHECKED OUT FOR EVERY SERVICE AND READ BY ONE.
+      #
+      # micro-beacon's Dockerfile carries `COPY --from=walletcore` because BJ-DEX-02 signs a real
+      # swap in a browser that has no wallet extension, and 25-wallet-clients.md section 3 forbids
+      # a fourth copy of a signer. Checked out unconditionally for the same reason the two above
+      # are: this workflow is called by every service repository and cannot branch on which one,
+      # and the step below STATS every named context before it reads a Dockerfile — so the
+      # directory must exist even where nothing COPYs from it. It is a dependency-free package;
+      # the checkout is small and there is no install.
+      - uses: actions/checkout@v4
+        if: inputs.kind == 'service'
+        with:
+          repository: cloudsforge-online/micro-hearth-wallet-core
+          path: wallet-core-ctx
+          token: ${{ secrets.estate_token || github.token }}
       - uses: actions/checkout@v4
         if: inputs.kind == 'web'
         with:
@@ -288,6 +303,7 @@ jobs:
             if [ "${{ inputs.kind }}" = "service" ]; then
               echo "runtimepkgs=${GITHUB_WORKSPACE}/runtime-ctx"
               echo "contractspkgs=${GITHUB_WORKSPACE}/contracts-ctx"
+              echo "walletcore=${GITHUB_WORKSPACE}/wallet-core-ctx"
             else
               echo "uipkg=${GITHUB_WORKSPACE}/ui-ctx"
             fi

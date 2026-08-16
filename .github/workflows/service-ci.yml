@@ -1204,6 +1204,14 @@ jobs:
           repository: cloudsforge-online/micro-contracts
           path: contracts-ctx
           token: ${{ secrets.estate_token || github.token }}
+      # micro-beacon's Dockerfile reads this one — `COPY --from=walletcore` — because BJ-DEX-02
+      # signs a real swap and may not carry its own copy of a signer. Checked out for every service
+      # for the same reason the two above are, and harmless where the Dockerfile never names it.
+      - uses: actions/checkout@v4
+        with:
+          repository: cloudsforge-online/micro-hearth-wallet-core
+          path: wallet-core-ctx
+          token: ${{ secrets.estate_token || github.token }}
       - uses: docker/setup-buildx-action@v3
       - name: Build
         uses: docker/build-push-action@v6
@@ -1213,6 +1221,7 @@ jobs:
           build-contexts: |
             runtimepkgs=${{ github.workspace }}/runtime-ctx
             contractspkgs=${{ github.workspace }}/contracts-ctx
+            walletcore=${{ github.workspace }}/wallet-core-ctx
           # `push: false` IS CORRECT HERE, and it is not the reason the estate has no published
           # images. This job is a GATE: it builds the image in order to boot it against Postgres
           # and read /livez, which needs `load: true` — the image in the runner's own daemon. The
