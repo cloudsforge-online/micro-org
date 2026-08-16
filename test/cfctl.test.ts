@@ -88,11 +88,22 @@ test('the registry holds every repository in the organisation, and every directo
   // without claiming something false. All five are `deployable: false`, so `DERIVED_PORT_ORDER`
   // below is UNCHANGED — the measurement that let this block be filed tidily by kind rather than
   // appended the way `pool`/`pool-web` and the two consoles had to be.
-  assert.equal(REGISTRY.length, 78);
+  //
+  // 79 since 2026-08-16: `exchange-web`, the Forge Exchange frontend of 39-forge-exchange.md §6
+  // phase H. ONE ROW AND NOT TWO, which is the fact this line exists to record: every other
+  // frontend added here arrived with a service beside it, and this one has none because there is
+  // no `micro-exchange` to add. Its counterpart is a factory, a router and WEMBER on Hearth, and
+  // the bundle reads them with `eth_call` from the reader's own browser. So `web` goes to 19 and
+  // `service` stays at 27 — a shape no previous row in this file has had, and the reason to assert
+  // both counts separately rather than only the total.
+  //
+  // Appended, like `pool`/`pool-web` and the two consoles, so `DERIVED_PORT_ORDER` below gains one
+  // entry at the end and moves none.
+  assert.equal(REGISTRY.length, 79);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
   assert.equal(counts.get('service'), 27, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera and the mining pool');
-  assert.equal(counts.get('web'), 18, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles and the pool console');
+  assert.equal(counts.get('web'), 19, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles, the pool console and Forge Exchange — the only one with no service beside it');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 5, '4 library repositories, plus the wallet core that publishes @cloudsforge/hearth-wallet-core');
   assert.equal(counts.get('assets'), 5, 'brand, the three per-title asset repositories and the wallet art');
@@ -100,11 +111,11 @@ test('the registry holds every repository in the organisation, and every directo
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 67);
+  assert.equal(managedRepos().length, 68);
   assert.equal(
     deployableRepos().length,
-    48,
-    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind',
+    49,
+    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind; 49 since exchange-web was appended at 4148',
   );
 });
 
@@ -248,6 +259,18 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   // them, both already pinned in micro-deploy's compose. Appended, this list grows and does not
   // shift, which is the only kind of registry edit that costs nothing.
   'pool', 'pool-web',
+  // 4148 — Forge Exchange's frontend, appended on 2026-08-16 for the same reason.
+  //
+  // THIS IS THE FIRST ENTRY IN THIS LIST WHOSE PORT NOTHING WILL EVER DIAL, and saying so here is
+  // cheaper than letting somebody find out by connecting to it. The derivation is positional and
+  // unconditional — index in `deployableRepos()`, plus 4100 — and it means "the service for this
+  // row, on a developer's machine". There is no service: `micro-exchange-web` reads Hearth
+  // directly, and the port it answers on in a checkout is its vite server, 5194, recorded in the
+  // surface registry's `devPort` rather than derived here. In the estate it is
+  // `exchange-web:8080` behind the gateway. 4148 exists because the derivation cannot skip a row,
+  // and it is pinned here for the only reason any of these are: so that inserting something above
+  // it is expensive.
+  'exchange-web',
   // NOTHING FOR THE FIVE WALLET ROWS OF 2026-08-10, and that absence is a measurement rather than
   // an omission (micro-org#352). `pool`, `pool-web`, `lantern-web` and `beacon-web` all had to be
   // appended because they are deployable, and position in `deployableRepos()` IS the port. The

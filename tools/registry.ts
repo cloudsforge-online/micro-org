@@ -691,6 +691,37 @@ export const REGISTRY: readonly Repo[] = [
   service('pool', '36', 'Stratum v1 mining pool: getblocktemplate, vardiff, share validation, block submission, PPLNS accounting'),
   web('pool-web', '36', 'Pool console: connection details, hashrate and share charts, worker list, blocks found, per-miner earnings'),
 
+  // -- Forge Exchange's frontend, created by 39-forge-exchange.md §6 phase H --------------------
+  //
+  // APPENDED, for the rule the two blocks above state and this one will not restate a third time.
+  // It derives 4148 and nothing above it moves.
+  //
+  // THERE IS NO `service('exchange', …)` BESIDE IT, AND THAT ABSENCE IS THE ROW'S MAIN FACT. Every
+  // other `web()` in this file has a service somewhere in this list that it reads; this one is the
+  // first deployable frontend in the estate whose entire data source is a chain. Forge Exchange is
+  // a factory, a router and WEMBER deployed on Hearth (phase F, booked); `micro-exchange-web`
+  // reads them with `eth_call` against `rpc.<apex>` from the reader's own browser. An AMM's whole
+  // state is four numbers in a pair contract, so a service in front of them could only ever be a
+  // cache that is wrong between blocks — 39 §2 argues that at length and this row follows it.
+  //
+  // THE DERIVED PORT IS THE ONE THING THIS ROW PRODUCES THAT NOTHING USES, and it is worth saying
+  // so rather than letting somebody discover it. 4148 is `4100 + index`, the address of a SERVICE
+  // on a developer's machine, and there is no service. The port this bundle actually answers on in
+  // a checkout is 5194 — its vite dev server, recorded in the surface registry's `devPort` — and
+  // in the estate it is `exchange-web:8080` behind the gateway, resolved by container name. The
+  // derived number exists because the derivation is positional and unconditional, not because
+  // anything dials it. `web-check.py` fails on a CHOSEN port in the derived block, so the honest
+  // move is to let it derive and say plainly that nothing calls it.
+  //
+  // `phase: '39'` follows the convention `RepoBase.phase` documents for repositories 03 §1 does not
+  // enumerate: the ecosystem document that CREATES it, as `19`, `20`, `23`, `25` and `36` do.
+  //
+  // `owns` says "no custody, no account" because `cfctl list` prints this string and it is the
+  // shortest description most readers will ever see of a surface that asks strangers to sign
+  // transactions. A description that left it out would be the one place in the estate where that
+  // claim is missing.
+  web('exchange-web', '39', 'Forge Exchange: swap against constant-product pools on Hearth, every market the factory has made, and the contract checks re-run in the browser. No custody, no account'),
+
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
   // These are in the list so that their absence from every cfctl operation is a stated decision
   // rather than an oversight. `kept()` is the only constructor that produces one, and it takes no
