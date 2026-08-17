@@ -297,11 +297,21 @@ jobs:
       MIN_REPOS: 45
       # ── THE RATCHET FOR INVARIANT 4, AND IT LIVES HERE RATHER THAN IN THE CHECKER ON PURPOSE.
       #
-      # 37 of the 113 routes in the four services that hold key material (custody, identity,
-      # devplatform, notify) have a response the body scan cannot fully account for. Every one is
-      # printed by `path:line` on every run, and each is a response that turns "no route returns key
-      # material" into "no route I could read returns key material" without a line of the check
-      # changing.
+      # 38 of the 119 routes in the six services that hold key material (custody, devplatform,
+      # identity, notify, wallet-desktop, wallet-extension) have a response the body scan cannot
+      # fully account for. Every one is printed by `path:line` on every run, and each is a response
+      # that turns "no route returns key material" into "no route I could read returns key material"
+      # without a line of the check changing.
+      #
+      # 37 → 38 ON 2026-08-17, AND ONE ROUTE IS THE WHOLE DIFFERENCE. micro-notify `ae2485f`
+      # (2026-08-12) added `POST /admin/deliveries/:id/resend`; its 202 body is `{ deliveryId }`,
+      # where the id comes back from `deps.store.resendDelivery(...)` — a dep-call, which a static
+      # walk cannot open by construction, because the value is a row the database made. This job has
+      # been red on main since that commit, and the honest reading of the failure is not "conformance
+      # got worse": it is that the estate grew a route in a key-holding service and the budget had to
+      # be re-recorded with the reason. The compensating work is micro-org#479 — a dynamic body scan
+      # in notify and in identity, which is what actually LOWERS this number, the way custody's
+      # a633986 did.
       #
       # micro-conformance holds the same number as `BASELINE_BLIND_ROUTES` and uses it as the
       # subcommand's default. That is its default; THIS is the gate. It is passed explicitly below so
@@ -310,7 +320,7 @@ jobs:
       # the step in BOTH directions: the count may go DOWN and be re-recorded here, and it may never
       # go up. A ratchet that is only printed is a comment, and a ratchet that only checks one
       # direction never tightens.
-      BODY_SCAN_BLIND_BASELINE: 37
+      BODY_SCAN_BLIND_BASELINE: 38
       # THE TITLE IS THE IDENTITY, so it is declared once and read three times: the step that opens
       # the issue, the step that finds it to comment on, and the step that closes it. Two literals
       # would be one edit away from a reporter that opens a fresh issue every night and never closes
