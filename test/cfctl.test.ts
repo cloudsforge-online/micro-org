@@ -97,13 +97,24 @@ test('the registry holds every repository in the organisation, and every directo
   // `service` stays at 27 — a shape no previous row in this file has had, and the reason to assert
   // both counts separately rather than only the total.
   //
+  // 80 since 2026-08-17: `journal-web`, the Forge Journal frontend of 40-forge-journal.md. The
+  // SECOND one-row frontend in a row, and for a different reason than the exchange's, which is why
+  // this line does not simply extend the one above it. The exchange has no service because its
+  // counterpart is a contract on Hearth. The Journal has no service because its counterpart is
+  // `src/content/` in its own repository: every article is a typed module, and the build renders
+  // each one to a static file with its own head. There is nothing to call at runtime, and a CMS
+  // would move the words out of git — which is the property an editorial archive least wants,
+  // since it is what makes an article's history a diff and its publication a merge.
+  //
+  // So `web` goes to 20 and `service` stays at 27 for the second consecutive addition.
+  //
   // Appended, like `pool`/`pool-web` and the two consoles, so `DERIVED_PORT_ORDER` below gains one
   // entry at the end and moves none.
-  assert.equal(REGISTRY.length, 79);
+  assert.equal(REGISTRY.length, 80);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
   assert.equal(counts.get('service'), 27, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera and the mining pool');
-  assert.equal(counts.get('web'), 19, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles, the pool console and Forge Exchange — the only one with no service beside it');
+  assert.equal(counts.get('web'), 20, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles, the pool console, Forge Exchange and Forge Journal — the last two the only ones with no service beside them');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 5, '4 library repositories, plus the wallet core that publishes @cloudsforge/hearth-wallet-core');
   assert.equal(counts.get('assets'), 5, 'brand, the three per-title asset repositories and the wallet art');
@@ -111,11 +122,11 @@ test('the registry holds every repository in the organisation, and every directo
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 68);
+  assert.equal(managedRepos().length, 69);
   assert.equal(
     deployableRepos().length,
-    49,
-    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind; 49 since exchange-web was appended at 4148',
+    50,
+    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind; 50 since journal-web was appended at 4149',
   );
 });
 
