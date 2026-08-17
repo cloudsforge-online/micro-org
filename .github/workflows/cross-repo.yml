@@ -183,6 +183,23 @@ jobs:
       # the one nothing is checking. micro-org is skipped because the checkout above already put it
       # there, at THIS run's ref rather than at main — a sweep graded by main's copy of itself
       # cannot test its own change.
+      #
+      # ── AND IT IS NOT FILTERED BY THE `micro-` PREFIX EITHER, WHICH IT WAS UNTIL 2026-08-17 ─────
+      #
+      # `cloudsforge-online/hearth` is the chain, it predates the prefix, and its name has no
+      # `micro-` in it. `select(.name | startswith("micro-"))` therefore skipped it — quietly, since
+      # a repository that was never listed cannot fail to clone. `site/test/estate-stages.test.ts`
+      # reads it, so every run of this job reported `site` as disagreeing with a sibling and named
+      # three assertions about `WEMBER.sol` and `node/test/dex.js` that were about nothing but an
+      # absent directory. Two days were spent on that: the checks pass on any developer's machine,
+      # where `hearth` is checked out like everything else, and the job printed only a TAP tail
+      # that named none of them.
+      #
+      # The exclusion is now the fail-safe direction. An INCLUDE rule that guesses wrong drops a
+      # repository silently and subtracts it from the denominator of every green result below; an
+      # EXCLUDE rule that guesses wrong clones one repository too many and costs a few seconds.
+      # `.github` is GitHub's own organisation-profile repository — reserved by the platform rather
+      # than a judgement about this estate — and is not a checkout of anything.
       # ────────────────────────────────────────────────────────────────────────────────────────────
       - name: Clone the estate
         env:
@@ -196,11 +213,11 @@ jobs:
           fi
 
           repos=$(gh api --paginate "orgs/${OWNER}/repos?per_page=100" \
-                    --jq '.[] | select(.archived == false) | select(.name | startswith("micro-")) | .name' || true)
-          printf '%s\n' "$repos" | sed '/^$/d' | grep -v '^micro-org$' > "$RUNNER_TEMP/repos.txt" || true
+                    --jq '.[] | select(.archived == false) | .name' || true)
+          printf '%s\n' "$repos" | sed '/^$/d' | grep -vxF -e micro-org -e .github > "$RUNNER_TEMP/repos.txt" || true
           listed=$(grep -c . "$RUNNER_TEMP/repos.txt" || true)
           listed=${listed:-0}
-          echo "the organisation lists ${listed} unarchived micro-* repositories beside this one"
+          echo "the organisation lists ${listed} unarchived repositories beside this one"
           if [ "$listed" -lt "$MIN_REPOS" ]; then
             echo "::error::only ${listed} repositories listed, expected at least ${MIN_REPOS}"
             echo "The token cannot see the organisation, and a sweep of what it CAN see reports agreement"

@@ -722,6 +722,26 @@ export const REGISTRY: readonly Repo[] = [
   // claim is missing.
   web('exchange-web', '39', 'Forge Exchange: swap against constant-product pools on Hearth, every market the factory has made, and the contract checks re-run in the browser. No custody, no account'),
 
+  // -- Forge Journal, created by 40-forge-journal.md ---------------------------------------------
+  //
+  // APPENDED, for the rule the blocks above state and this one will not restate. It derives 4149
+  // and nothing above it moves.
+  //
+  // THE SECOND `web()` IN THIS FILE WITH NO SERVICE BESIDE IT, and for a different reason from
+  // `exchange-web`'s. The exchange has no service because its state lives on a chain. The Journal
+  // has none because its state is IN THE FRONTEND REPOSITORY: every article is a typed module under
+  // `src/content/articles/`, and the build renders each one to a static HTML file. That is not a
+  // shortcut around writing a CMS; it is the only architecture that answers the requirement the
+  // surface exists for. A blog whose article HTML is assembled by JavaScript after load hands every
+  // link-preview fetcher — none of which run scripts — one identical card for every article, and
+  // hands a crawler a document whose `<title>` is the site's rather than the piece's. micro-site
+  // documents that exact limitation in its own `index.html` and lives with it, because a marketing
+  // site has eleven addresses. An editorial surface cannot.
+  //
+  // So `owns` names prerendering first: it is the single fact that decides whether this surface can
+  // do its job, and `cfctl list` prints this string.
+  web('journal-web', '40', 'Forge Journal: the public editorial surface. Every article prerendered to its own HTML with its own title, description, card and Article JSON-LD; RSS and a sitemap generated from the same content'),
+
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
   // These are in the list so that their absence from every cfctl operation is a stated decision
   // rather than an oversight. `kept()` is the only constructor that produces one, and it takes no

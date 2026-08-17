@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
   bindsEstateRoot,
+  failureReport,
   reachesForSibling,
   scanCrossRepo,
   siblingReads,
@@ -137,6 +138,72 @@ describe('pointing a repository own test runner at specific files', () => {
   it('an unfamiliar runner is refused rather than guessed at', () => {
     assert.equal(testCommandFor('vitest run', ['test/a.test.ts']), undefined);
     assert.equal(testCommandFor('node scripts/check.js', ['test/a.test.ts']), undefined);
+  });
+});
+
+// -- what the red says -------------------------------------------------------------------------
+
+describe('the report a failing reader prints', () => {
+  // This started as `output.slice(-25)`, and micro-org#478's run is the measurement that killed it:
+  // `site` failed three assertions and the twenty-five lines printed were all TAP epilogue. The
+  // count was in the log, the names were not, and the only way to learn them was to re-run the
+  // whole sweep on a developer's machine — where, it turned out, they passed.
+  it('names the failures out of a TAP stream, where they are nowhere near the end', () => {
+    const tap = [
+      'TAP version 13',
+      '# Subtest: the site lists every surface',
+      '    not ok 1 - the site lists every surface',
+      '      ---',
+      "      error: 'journal is in the registry and on no page'",
+      '      code: ERR_ASSERTION',
+      '      ...',
+      'ok 2 - something fine',
+      ...Array.from({ length: 30 }, (_, i) => `ok ${i + 3} - filler`),
+      '# tests 84',
+      '# pass 81',
+      '# fail 3',
+    ];
+    const report = failureReport(tap);
+    assert.ok(report.includes('    not ok 1 - the site lists every surface'));
+    assert.ok(report.includes("      error: 'journal is in the registry and on no page'"));
+    // And it does NOT drown the name in the passes that followed it.
+    assert.equal(
+      report.some((line) => line.includes('filler')),
+      false,
+    );
+  });
+
+  // The other reporter, which a repository gets by pinning `--test-reporter=spec` in its own test
+  // script. Its detail IS at the end, so the block from the marker is the whole answer.
+  it('keeps the spec reporter block whole, from its marker', () => {
+    const spec = [
+      'ℹ tests 164',
+      '✖ failing tests:',
+      '',
+      'test at test/brand-chrome.test.ts:1:4301',
+      '✖ the digests are stale',
+    ];
+    assert.deepEqual(failureReport(spec), [
+      '✖ failing tests:',
+      '',
+      'test at test/brand-chrome.test.ts:1:4301',
+      '✖ the digests are stale',
+    ]);
+  });
+
+  // A crash before any test ran emits neither shape, and the stack is then the entire diagnosis.
+  it('falls back to the tail when the run never produced a test at all', () => {
+    const crash = ['node:internal/modules/esm/resolve:275', "  throw new ERR_MODULE_NOT_FOUND(", 'Cannot find package'];
+    assert.deepEqual(failureReport(crash), crash);
+  });
+
+  // Bounded, because a reader with forty failures would otherwise bury the run's own summary — and
+  // the cap says so rather than trailing off, which is the tail's failure again in a new place.
+  it('says when it truncated, rather than trailing off', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `not ok ${i + 1} - assertion ${i + 1}`);
+    const report = failureReport(many, 10);
+    assert.equal(report.length, 11);
+    assert.match(report[10] ?? '', /^… 30 more line\(s\)/);
   });
 });
 
