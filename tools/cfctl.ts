@@ -1199,6 +1199,61 @@ function testScript(dir: string): string | undefined {
   return scripts?.['test'];
 }
 
+/** A TAP failure line: `not ok 12 - the site lists every surface`, at any nesting depth. */
+const TAP_FAILURE = /^\s*not ok \d+ - /;
+/** The header the `spec` reporter prints above its own failure detail, at the very end of a run. */
+const SPEC_FAILURES = /✖ failing tests:/;
+
+/**
+ * The lines of a failed run that NAME what failed.
+ *
+ * ── WHY THIS IS NOT A TAIL ───────────────────────────────────────────────────────────────────
+ *
+ * It used to be `output.slice(-25)`, and on 2026-08-17 that printed, for a `site` run with three
+ * red assertions in it, twenty-five lines of TAP epilogue — `ok 21 - …`, `# tests 84`, `# fail 3`
+ * — and not one of the three names. The count was there and the identities were not, so the only
+ * way to learn what had broken was to reproduce the whole sweep locally, which is exactly the work
+ * this report exists to save. A tail is only the right answer when the reporter puts its detail
+ * last, and only ONE of the two reporters in this estate does.
+ *
+ * Both are in play and neither is chosen here. `node --test` emits `spec` when stdout is a TTY and
+ * `tap` when it is not, so a developer's terminal and a GitHub runner disagree about the format of
+ * the same failing run — and a repository whose own test script pins `--test-reporter=spec` gets
+ * spec in both. So this reads whichever arrived:
+ *
+ *   spec — a `✖ failing tests:` block at the end, holding each name and its assertion. Kept whole
+ *          from the marker, because everything after it is the detail.
+ *   tap  — `not ok N - <name>` scattered through the stream, each followed by a YAML block ending
+ *          in `...` that carries the message, the expected and the actual. Kept per failure.
+ *
+ * The fallback is the old tail, for a runner that is neither: a crash before any test ran prints
+ * a stack and no `not ok` at all, and twenty-five lines of that is the whole diagnosis.
+ */
+export function failureReport(output: readonly string[], limit = 80): string[] {
+  const capped = (lines: readonly string[]): string[] =>
+    lines.length <= limit
+      ? [...lines]
+      : [...lines.slice(0, limit), `… ${lines.length - limit} more line(s) — reproduce with 'cfctl cross --repo'`];
+
+  const spec = output.findIndex((line) => SPEC_FAILURES.test(line));
+  if (spec >= 0) return capped(output.slice(spec));
+
+  const picked: string[] = [];
+  for (let i = 0; i < output.length; i += 1) {
+    if (!TAP_FAILURE.test(output[i] ?? '')) continue;
+    picked.push(output[i] ?? '');
+    // The YAML block under a TAP failure holds the assertion. It ends at a lone `...`; the bound is
+    // there so a stack trace in one failure cannot crowd out the name of the next.
+    for (let j = i + 1; j < output.length && j - i <= 20; j += 1) {
+      const line = output[j] ?? '';
+      if (TAP_FAILURE.test(line)) break;
+      picked.push(line);
+      if (/^\s*\.\.\.\s*$/.test(line)) break;
+    }
+  }
+  return picked.length > 0 ? capped(picked) : [...output.slice(-25)];
+}
+
 function cmdCross(args: Args): number {
   const known = new Set(REGISTRY.map((repo) => repo.name));
   const only = args.option('repo');
@@ -1348,7 +1403,7 @@ function cmdCross(args: Args): number {
       failed += 1;
       process.stdout.write(`${pad('FAIL', 6)}${scan.repo}\n`);
       const output = `${result.out}\n${result.err}`.trim().split('\n');
-      for (const line of output.slice(-25)) process.stdout.write(`       ${line}\n`);
+      for (const line of failureReport(output)) process.stdout.write(`       ${line}\n`);
     }
   }
 
