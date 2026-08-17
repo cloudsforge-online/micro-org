@@ -110,11 +110,24 @@ test('the registry holds every repository in the organisation, and every directo
   //
   // Appended, like `pool`/`pool-web` and the two consoles, so `DERIVED_PORT_ORDER` below gains one
   // entry at the end and moves none.
-  assert.equal(REGISTRY.length, 80);
+  //
+  // 82 since 2026-08-17: `agora` and `agora-web`, Forge Agora of 41-forge-agora.md. TWO ROWS, and
+  // the run of one-row frontends ends here rather than continuing — which is the fact worth
+  // recording, because the two lines above it explain at length why a frontend can arrive alone.
+  // Both of those reasons were about where the state lives: on Hearth for the exchange, in git for
+  // the Journal. Agora's state is what strangers wrote a minute ago. There is no chain to read it
+  // from and no build that can contain it, so `service` moves for the first time since the mining
+  // pool — to 28 — and `web` to 21.
+  //
+  // The pair goes in together and at the end, so they derive 4150 and 4151 and nothing above them
+  // moves. Filed by kind instead, `agora` would have landed among the services at index 26 and
+  // shifted every frontend in the registry down one, which is the edit `DERIVED_PORT_ORDER` exists
+  // to price.
+  assert.equal(REGISTRY.length, 82);
   const counts = new Map<string, number>();
   for (const repo of REGISTRY) counts.set(repo.kind, (counts.get(repo.kind) ?? 0) + 1);
-  assert.equal(counts.get('service'), 27, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera and the mining pool');
-  assert.equal(counts.get('web'), 20, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles, the pool console, Forge Exchange and Forge Journal — the last two the only ones with no service beside them');
+  assert.equal(counts.get('service'), 28, '22 from 03 §1.1, plus emberkin, foresight, aetherholm, tessera, the mining pool and Forge Agora');
+  assert.equal(counts.get('web'), 21, '11 from 03 §1.2, four of the five 05-user-journeys §1 records (foresight-admin-web folded into admin-web at P13), the two operator consoles, the pool console, Forge Exchange, Forge Journal and Forge Agora — the exchange and the Journal the only two with no service beside them');
   assert.equal(counts.get('ops'), 3, '3 operations services');
   assert.equal(counts.get('library'), 5, '4 library repositories, plus the wallet core that publishes @cloudsforge/hearth-wallet-core');
   assert.equal(counts.get('assets'), 5, 'brand, the three per-title asset repositories and the wallet art');
@@ -122,11 +135,11 @@ test('the registry holds every repository in the organisation, and every directo
   assert.equal(counts.get('template'), 2, '2 templates');
   assert.equal(counts.get('org'), 4, 'org, docs, deploy and conformance — machinery, not product');
   assert.equal(counts.get('kept'), 11, '3 kept, 7 leaving, and one that is not ours at all');
-  assert.equal(managedRepos().length, 69);
+  assert.equal(managedRepos().length, 71);
   assert.equal(
     deployableRepos().length,
-    50,
-    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind; 50 since journal-web was appended at 4149',
+    52,
+    'services, frontends and operations services — UNCHANGED by the five wallet rows, which is why they could be filed by kind; 52 since agora and agora-web were appended at 4150 and 4151',
   );
 });
 
@@ -282,6 +295,17 @@ const DERIVED_PORT_ORDER: readonly string[] = [
   // and it is pinned here for the only reason any of these are: so that inserting something above
   // it is expensive.
   'exchange-web',
+  // 4149 — Forge Journal's frontend, appended on 2026-08-17. The second entry whose port nothing
+  // dials, for a different reason from the exchange's: the Journal has no service because every
+  // article is a typed module in its own repository and the build renders it to a file. In a
+  // checkout it answers on vite's 5195; in the estate it is `journal-web:8080` behind the gateway.
+  'journal-web',
+  // 4150-4151 — Forge Agora, appended on 2026-08-17. THE FIRST ENTRY SINCE `pool` WHOSE DERIVED
+  // PORT IS A REAL ADDRESS, and it is worth saying because the three lines above this one all
+  // explain why a number here dials nothing. `micro-agora` is a service: 4150 is where it listens
+  // in a checkout, the same way 4100 is identity's. 4151 is `agora-web`, and that one is inert
+  // again — the bundle's dev server is 5197, recorded in the surface registry's `devPort`.
+  'agora', 'agora-web',
   // NOTHING FOR THE FIVE WALLET ROWS OF 2026-08-10, and that absence is a measurement rather than
   // an omission (micro-org#352). `pool`, `pool-web`, `lantern-web` and `beacon-web` all had to be
   // appended because they are deployable, and position in `deployableRepos()` IS the port. The

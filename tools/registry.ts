@@ -742,6 +742,30 @@ export const REGISTRY: readonly Repo[] = [
   // do its job, and `cfctl list` prints this string.
   web('journal-web', '40', 'Forge Journal: the public editorial surface. Every article prerendered to its own HTML with its own title, description, card and Article JSON-LD; RSS and a sitemap generated from the same content'),
 
+  // -- Forge Agora, created by 41-forge-agora.md -------------------------------------------------
+  //
+  // APPENDED, and this pair is the reason the append-only rule is written down rather than assumed:
+  // two rows land together, so they derive 4150 and 4151, and every index above them is untouched.
+  // Inserting them anywhere else would have renumbered the two rows above and silently moved a
+  // developer's `journal-web` off the port their shell history dials.
+  //
+  // A SERVICE *AND* A FRONTEND, which the two rows above it deliberately are not. The exchange has
+  // no service because its state is on a chain; the Journal has none because its state is in the
+  // repository. Agora has one because its state is neither: it is what strangers typed a minute
+  // ago, and there is no chain and no build step that can hold that. Everything that makes this
+  // surface hard — a bar that has to be enforced on every read path, a rate limit that has to
+  // survive a restart, a notification that must not become an email nobody asked for — is server
+  // work, and 41 §4 makes each of them a test rather than an intention.
+  //
+  // `owns` names the refusals rather than the features, because `cfctl list` prints this string and
+  // a one-line description of a social network that says "posts, replies, follows" describes forty
+  // other products. What is actually distinctive here is what it will not do: there is no ranked
+  // feed, and nothing counts an audience in public. Both are enforced (41 §4.1, §4.2), and a reader
+  // deciding whether this row is the thing they are looking for is better served by the constraint
+  // than by the feature list.
+  service('agora', '41', 'Forge Agora: voices, posts, replies, quotes, echoes, sparks, follows, circles, tags, whispers, notifications and moderation. Reverse-chronological only — no ranked feed, and no audience count is ever public'),
+  web('agora-web', '41', 'Forge Agora: the public square. Composing, reading and moderating conversation on one account, with an explicit control to load more rather than a feed that never ends'),
+
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
   // These are in the list so that their absence from every cfctl operation is a stated decision
   // rather than an oversight. `kept()` is the only constructor that produces one, and it takes no
