@@ -340,12 +340,19 @@ jobs:
           fi
           mkdir -p "$ESTATE"
 
+          # NOT filtered by the `micro-` prefix — `cloudsforge-online/hearth` is the chain, it
+          # predates the prefix, and an include-by-prefix rule dropped it silently for as long as
+          # this job has existed. A repository that was never listed cannot fail to clone, so it
+          # left no trace: the sweep just certified an estate it had not read the chain of.
+          # Excluding is the fail-safe direction — a wrong exclusion costs one clone, a wrong
+          # inclusion rule costs a repository nothing is checking. `.github` is GitHub's own
+          # organisation-profile repository, not a checkout of anything.
           repos=$(gh api --paginate "orgs/${OWNER}/repos?per_page=100" \
-                    --jq '.[] | select(.archived == false) | select(.name | startswith("micro-")) | .name' || true)
-          printf '%s\n' "$repos" | sed '/^$/d' > "$RUNNER_TEMP/repos.txt"
+                    --jq '.[] | select(.archived == false) | .name' || true)
+          printf '%s\n' "$repos" | sed '/^$/d' | grep -vxF .github > "$RUNNER_TEMP/repos.txt" || true
           listed=$(grep -c . "$RUNNER_TEMP/repos.txt" || true)
           listed=${listed:-0}
-          echo "the organisation lists ${listed} unarchived micro-* repositories"
+          echo "the organisation lists ${listed} unarchived repositories"
           if [ "$listed" -lt "$MIN_REPOS" ]; then
             echo "::error::only ${listed} repositories listed, expected at least ${MIN_REPOS}"
             echo "The token cannot see the organisation. A sweep of what it CAN see would report"
