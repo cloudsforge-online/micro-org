@@ -38,6 +38,24 @@ on:
         required: false
         default: true
         type: boolean
+      base-path:
+        description: >-
+          Where this bundle is mounted INSIDE ITS OWN CONTAINER, when it is a folder on the apex
+          rather than a surface with its own hostname — '/agora', '/market'. Empty for a surface
+          that owns a hostname, which is the default and stays correct for every caller that has
+          not moved.
+
+          It is not cosmetic. `docs/apex-consolidation.md` bakes the mount in at build time
+          (vite's `base:`) and serves it from an nginx whose every `location` carries it, so a
+          mounted container answers `GET /` with a 404 — CORRECTLY — and this workflow's readiness
+          loop would wait twenty seconds and then report a healthy image as a dead one.
+
+          `deep-link-path` stays a ROUTER path and is prefixed with this, matching how each of
+          those repositories separates the two in its own `routes.ts`. Do not write the mount into
+          both: '/agora' plus '/agora/circles' probes '/agora/agora/circles'.
+        required: false
+        default: ''
+        type: string
       deep-link-path:
         description: >-
           A route the app really has, checked to return 200 on a hard refresh — '/portfolio',
@@ -277,13 +295,14 @@ jobs:
       - name: The image serves the SPA
         run: |
           set -euo pipefail
+          BASE='${{ inputs.base-path }}'
           docker run -d --name ci-${{ inputs.app }} -p 127.0.0.1:8080:8080 ${{ inputs.app }}:ci
           for attempt in $(seq 1 20); do
-            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ || true)
+            code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$BASE/" || true)
             [ "$code" = "200" ] && break
             sleep 1
           done
-          [ "${code:-}" = "200" ] || { echo "::error::the image returned ${code:-no answer} for /"; docker logs --tail 60 ci-${{ inputs.app }}; exit 1; }
+          [ "${code:-}" = "200" ] || { echo "::error::the image returned ${code:-no answer} for $BASE/"; docker logs --tail 60 ci-${{ inputs.app }}; exit 1; }
           # THIS CHECK USED TO DEMAND THE OPPOSITE OF THE ESTATE'S RULE, and it named the banned
           # directive in its own failure message. It requested the invented path
           # `/some/deep/route`, required 200, and told you to add `try_files … /index.html` — which
@@ -295,7 +314,7 @@ jobs:
           #
           # The property actually worth checking is BOTH halves, and they are different paths:
           # a route the app really has serves the shell with 200, and a route nobody has 404s.
-          unknown=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nothing-is-here-$RANDOM || true)
+          unknown=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$BASE/nothing-is-here-$RANDOM" || true)
           [ "$unknown" = "404" ] || {
             echo "::error::an unknown path returned $unknown, not 404"
             echo "Serve the shell through 'error_page 404 /index.html' so the app renders its own"
@@ -305,15 +324,36 @@ jobs:
           echo "ok: an unknown path 404s"
 
           if [ -n "${{ inputs.deep-link-path }}" ]; then
-            deep=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080${{ inputs.deep-link-path }}" || true)
+            deep=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$BASE${{ inputs.deep-link-path }}" || true)
             [ "$deep" = "200" ] || {
-              echo "::error::the real route ${{ inputs.deep-link-path }} returned $deep, not 200"
+              echo "::error::the real route $BASE${{ inputs.deep-link-path }} returned $deep, not 200"
               echo "A route the app owns must survive a hard refresh. Add it to nginx.conf's location list."
               exit 1
             }
-            echo "ok: ${{ inputs.deep-link-path }} survives a hard refresh"
+            echo "ok: $BASE${{ inputs.deep-link-path }} survives a hard refresh"
           else
             echo "note: no deep-link-path given, so no real route was checked on a hard refresh"
+          fi
+
+          # ── AND WHEN A BUNDLE IS MOUNTED, THE ROOT MUST BE EMPTY ────────────────────────────
+          #
+          # Two probes that exist only for a folder, and both assert a 404. Behind the gateway
+          # neither address ever reaches this container — the apex root is micro-site's and the
+          # apex robots.txt is micro-site's — so they are invisible in production and immediate
+          # under `docker run`, which is where a wrong `base:` or a wrong `COPY` destination shows
+          # up first. A mounted image that answers 200 on `/` has been copied to the document root
+          # and will shadow the marketing site the moment it is deployed.
+          if [ -n "$BASE" ]; then
+            for path in / /robots.txt; do
+              at_root=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$path" || true)
+              [ "$at_root" = "404" ] || {
+                echo "::error::this bundle is mounted at $BASE and still answers $at_root for $path"
+                echo "Check 'base:' in vite.config.ts, the COPY destination in Dockerfile, and every"
+                echo "location in nginx.conf. A mounted image serving / would shadow the apex."
+                exit 1
+              }
+            done
+            echo "ok: / and /robots.txt are 404 — the mount does not leak to the root"
           fi
       - name: Down
         if: always()
