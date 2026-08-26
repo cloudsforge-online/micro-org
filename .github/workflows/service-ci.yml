@@ -1320,10 +1320,13 @@ jobs:
           image="${SERVICE}:ci"
           name="ci-${SERVICE}"
 
-          # The declared database variable, defaulted the same way every other job defaults it.
-          dbvar="$DECLARED"
-          if [ -z "$dbvar" ]; then
-            dbvar="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+          # The declared database variableS, normalised and defaulted exactly as the test job
+          # does it — same separators, same default. PLURAL, and read under `set -u` by the loop
+          # below: this was `dbvar` while the loop said `dbvars`, and a half-landed rename is
+          # what that reads as at runtime.
+          dbvars="$(printf '%s' "$DECLARED" | tr ',\n' '  ' | tr -s ' ' | sed 's/^ *//; s/ *$//')"
+          if [ -z "$dbvars" ]; then
+            dbvars="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
           fi
 
           # The service's declared configuration, one `-e` per non-empty line.
@@ -1398,7 +1401,6 @@ jobs:
 
           net=(-p "127.0.0.1:${PORT}:${PORT}")
           if [ "$NEEDS_DB" = "true" ]; then
-            dsn="postgres://ci:ci@127.0.0.1:5432/ci_test"
             # HOST networking so the container reaches the Postgres SERVICE on the runner's
             # 127.0.0.1:5432. Bridge networking is exactly what put 127.0.0.1 inside the container,
             # where nothing listened — the heart of this defect. `-p` is meaningless under host mode,
