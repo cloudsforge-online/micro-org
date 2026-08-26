@@ -50,12 +50,127 @@ test('the CI database is named so the suites will accept it', () => {
   assert.ok(dsn.endsWith(dbName), `the DSN (${dsn}) must point at the container's database`)
 })
 
+/**
+ * The Test step's export block, lifted out of the workflow and RUN — not a second copy of it, and
+ * for the same reason as the skip scan below.
+ *
+ * This used to be three regexes matching `export "$want=$CI_DSN"` and `export "$test_var=$CI_DSN"`.
+ * micro-org#519 turned the block into a LOOP over a declared list, so those names no longer exist
+ * and the assertions went red — while saying nothing at all about whether the property they are
+ * about still held. A text pin cannot: what matters is not which shell variables the loop uses, it
+ * is that each declared name comes out of it with BOTH halves pointing at the SAME database.
+ */
+const EXPORT_BLOCK = (() => {
+  const fromMarker = "          test_vars=''\n"
+  const toMarker = '            export DATABASE_URL="$CI_DSN"\n          fi'
+  const from = WORKFLOW.indexOf(fromMarker)
+  const to = WORKFLOW.indexOf(toMarker)
+  assert.ok(from > 0 && to > from, "the Test step's export block has moved or been renamed in service-ci.yml")
+  // Dedented to column zero. The block is a YAML scalar, so it carries the file's indentation.
+  return WORKFLOW.slice(from, to + toMarker.length)
+    .split('\n')
+    .map((line) => line.replace(/^ {10}/, ''))
+    .join('\n')
+})()
+
+/**
+ * A `psql` that does nothing, first on the PATH of every lifted block below.
+ *
+ * The block creates one database per declared name. Whether that CREATE succeeds decides nothing
+ * these tests assert — the workflow swallows its outcome — but running the real client would let a
+ * developer who happens to have a local Postgres answering to ci/ci acquire a handful of
+ * `ci_*_test` databases for running the suite. A test may read the estate; it may not change it.
+ */
+const NO_PSQL = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'no-psql-'))
+  writeFileSync(join(dir, 'psql'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  return dir
+})()
+
+/** Run the real export block and report what it left in the environment. */
+function exported(
+  service: string,
+  declared: string,
+  needsDb = true,
+): { testVars: string[]; env: Record<string, string> } {
+  const res = spawnSync(
+    'bash',
+    [
+      '-c',
+      `set -uo pipefail\n${EXPORT_BLOCK}\n` +
+        `printf 'VARS<%s>\\n' "$test_vars"\n` +
+        `env | grep -E '_DATABASE_URL=' | sort || true`,
+    ],
+    {
+      encoding: 'utf8',
+      // A DELIBERATELY EMPTY ENVIRONMENT except for what the step declares. Inheriting the
+      // developer's would let a stray FOO_DATABASE_URL in their shell be read back as something
+      // this block exported, which is the shape of a test that passes without exercising anything.
+      env: {
+        PATH: `${NO_PSQL}:${process.env['PATH'] ?? ''}`,
+        SERVICE: service,
+        DECLARED: declared,
+        NEEDS_DB: String(needsDb),
+        CI_DSN: 'postgres://ci:ci@127.0.0.1:5432/ci_test',
+      },
+    },
+  )
+  assert.equal(res.status, 0, `the export block itself failed to run: ${res.stderr}`)
+  const vars = /VARS<([^>]*)>/.exec(res.stdout)
+  assert.ok(vars, `the export block produced no verdict: ${res.stdout} ${res.stderr}`)
+  const env: Record<string, string> = {}
+  for (const line of res.stdout.split('\n')) {
+    const kv = /^([A-Z][A-Z0-9_]*_DATABASE_URL)=(.*)$/.exec(line)
+    if (kv?.[1]) env[kv[1]] = kv[2] ?? ''
+  }
+  return { testVars: (vars[1] ?? '').split(' ').filter((name) => name !== ''), env }
+}
+
 test('both the runtime and the test variable are exported, because they are read by different code', () => {
   // Migration helpers read <SERVICE>_DATABASE_URL; testsupport.ts reads <SERVICE>_TEST_DATABASE_URL.
-  // Exporting only one leaves half the suite unable to open a connection.
-  assert.match(WORKFLOW, /_DATABASE_URL\/_TEST_DATABASE_URL/)
-  assert.match(WORKFLOW, /export "\$want=\$CI_DSN"/)
-  assert.match(WORKFLOW, /export "\$test_var=\$CI_DSN"/)
+  // Exporting only one leaves half the suite unable to open a connection — and exporting them at
+  // DIFFERENT DSNs is that same defect wearing a disguise, because the half that migrates and the
+  // half that queries would then be looking at two databases.
+  const one = exported('ledger', '')
+  assert.deepEqual(one.testVars, ['LEDGER_TEST_DATABASE_URL'], 'the suite variable is the declared one with _TEST_ in it')
+  assert.ok(one.env['LEDGER_DATABASE_URL'], 'the migration helpers\' variable must be exported')
+  assert.equal(
+    one.env['LEDGER_DATABASE_URL'],
+    one.env['LEDGER_TEST_DATABASE_URL'],
+    'both halves must name ONE database, or the migration and the queries diverge',
+  )
+  assert.match(
+    one.env['LEDGER_TEST_DATABASE_URL'] ?? '',
+    /test/i,
+    'every testsupport.ts refuses a DSN whose database name does not match /test/i, and the refusal is a silent skip',
+  )
+
+  // A hyphenated service still derives the underscored name when it declares nothing.
+  assert.deepEqual(exported('hub-api', '').testVars, ['HUB_API_TEST_DATABASE_URL'])
+
+  // #519: a merged deployable owns the databases of the services it absorbed. Every declared name
+  // gets both halves, and its OWN database — two names sharing one would have each suite
+  // truncating the other's identically-named tables, which presents as a flake.
+  const merged = exported('lantern', 'LANTERN_DATABASE_URL, ANALYTICS_DATABASE_URL')
+  assert.deepEqual(merged.testVars, ['LANTERN_TEST_DATABASE_URL', 'ANALYTICS_TEST_DATABASE_URL'])
+  for (const prefix of ['LANTERN', 'ANALYTICS']) {
+    assert.equal(
+      merged.env[`${prefix}_DATABASE_URL`],
+      merged.env[`${prefix}_TEST_DATABASE_URL`],
+      `${prefix}'s two halves must name one database`,
+    )
+    assert.match(merged.env[`${prefix}_DATABASE_URL`] ?? '', /test/i)
+  }
+  assert.notEqual(
+    merged.env['LANTERN_DATABASE_URL'],
+    merged.env['ANALYTICS_DATABASE_URL'],
+    'one database PER declared name: `lantern.events` and `analytics.events` both exist',
+  )
+
+  // A service with no database exports nothing, and hands the skip scan an empty list rather than
+  // an unset variable — which under this step's `set -u` would abort the whole step.
+  assert.deepEqual(exported('ledger', '', false).testVars, [])
+  assert.deepEqual(exported('ledger', '', false).env, {})
 })
 
 /**
@@ -80,10 +195,15 @@ const SKIP_SCAN = (() => {
 /**
  * Run the real classification over one captured run, and say what it decided.
  *
- * `blind` is the fatal case — this service's own database was absent and nothing ran.
- * `standdown` is the cross-service case — a tier needing a SECOND service's database.
+ * `blind` is the fatal case — a database this job DID provide was absent and nothing ran.
+ * `standdown` is the cross-service case — a tier needing a database this job does not provide.
+ *
+ * `exports` is what the export block above put in `test_vars`: the list of every variable this job
+ * exported, which is what "own" means. It is a LIST since micro-org#519, and that plurality is the
+ * whole asymmetry — a merged service declaring two databases had every suite gated on the SECOND
+ * one filed as a stand-down and went green having run none of them.
  */
-function classify(testVar: string, output: string): { blind: string; standdown: string } {
+function classify(exports: readonly string[], output: string): { blind: string; standdown: string } {
   const dir = mkdtempSync(join(tmpdir(), 'skipscan-'))
   const file = join(dir, 'test-output.txt')
   writeFileSync(file, output)
@@ -92,9 +212,21 @@ function classify(testVar: string, output: string): { blind: string; standdown: 
   // classify an empty run as clean and pass every case below.
   const script = SKIP_SCAN.replaceAll('/tmp/test-output.txt', file)
   assert.ok(script.includes(file), 'the lifted scan no longer reads /tmp/test-output.txt')
+  // The name this harness fills in has to be the name the scan reads. `set -u` already turns a
+  // mismatch into a non-zero exit rather than a wrong verdict, but it says so as `unbound
+  // variable`, which reads as a broken test rather than as the workflow having been renamed.
+  assert.match(
+    script,
+    /for tv in \$test_vars; do/,
+    'the scan no longer judges a skip against the LIST of exported variables',
+  )
   const res = spawnSync(
     'bash',
-    ['-c', `set -uo pipefail\ntest_var="${testVar}"\n${script}\nprintf 'BLIND<%s>STANDDOWN<%s>' "$blind" "$standdown"`],
+    [
+      '-c',
+      `set -uo pipefail\ntest_vars="${exports.join(' ')}"\n${script}\n` +
+        `printf 'BLIND<%s>STANDDOWN<%s>' "$blind" "$standdown"`,
+    ],
     { encoding: 'utf8' },
   )
   assert.equal(res.status, 0, `the scan itself failed to run: ${res.stderr}`)
@@ -103,23 +235,50 @@ function classify(testVar: string, output: string): { blind: string; standdown: 
   return { blind: parsed[1] ?? '', standdown: parsed[2] ?? '' }
 }
 
+/** micro-lantern after the M1 merge: one deployable, two former services, two databases. */
+const MERGED = ['LANTERN_TEST_DATABASE_URL', 'ANALYTICS_TEST_DATABASE_URL']
+
 test('a skipped database suite fails the build rather than passing quietly', () => {
   // This is the whole point. A green run that skipped its database tests is worse than a red one,
   // because it is believed.
   assert.match(WORKFLOW, /database-backed tests SKIPPED/)
 
   // The disaster, in both the phrasings the estate's suites actually produce.
-  const named = classify('LEDGER_TEST_DATABASE_URL', '↷ balances # set LEDGER_TEST_DATABASE_URL (name must contain "test")\n')
+  const named = classify(['LEDGER_TEST_DATABASE_URL'], '↷ balances # set LEDGER_TEST_DATABASE_URL (name must contain "test")\n')
   assert.match(named.blind, /LEDGER_TEST_DATABASE_URL/, "the service's own DSN missing must be fatal")
   assert.equal(named.standdown, '')
 
-  const unnamed = classify('CUSTODY_TEST_DATABASE_URL', 'database tests are disabled\n')
+  const unnamed = classify(['CUSTODY_TEST_DATABASE_URL'], 'database tests are disabled\n')
   assert.match(unnamed.blind, /disabled/, 'a skip naming no variable at all must be fatal')
 
   // A clean run is neither.
-  const clean = classify('LEDGER_TEST_DATABASE_URL', 'ℹ tests 195\nℹ pass 195\n')
+  const clean = classify(['LEDGER_TEST_DATABASE_URL'], 'ℹ tests 195\nℹ pass 195\n')
   assert.equal(clean.blind, '')
   assert.equal(clean.standdown, '')
+
+  // ── THE CASE micro-org#519 EXISTS FOR ────────────────────────────────────────────────────────
+  //
+  // A merged deployable declares two databases and this job provides both. The scan used to judge
+  // a skip against the ONE variable it exported, so a suite gated on the SECOND one skipping was
+  // filed as "a cross-service tier stood down" — a notice, and green. The build would pass having
+  // run none of the absorbed service's suites: the exact false green this block was written to end,
+  // reintroduced by the merge it has to survive.
+  //
+  // Every declared name must be fatal, not just the first, so both positions are exercised. A test
+  // that only checked the first would pass on the defective workflow.
+  for (const own of MERGED) {
+    const missed = classify(MERGED, `↷ rollups # set ${own} (name must contain "test")\n`)
+    assert.match(missed.blind, new RegExp(own), `${own} is a database this job PROVIDES; skipping it must be fatal`)
+    assert.equal(missed.standdown, '', `${own} is not a foreign tier standing down`)
+  }
+
+  // Both own names in one sentence is the same disaster, not an excuse.
+  const bothOwn = classify(
+    MERGED,
+    '↷ events # set LANTERN_TEST_DATABASE_URL and ANALYTICS_TEST_DATABASE_URL (both names must contain "test")\n',
+  )
+  assert.match(bothOwn.blind, /LANTERN_TEST_DATABASE_URL/)
+  assert.equal(bothOwn.standdown, '')
 })
 
 test('a cross-service tier standing down is reported, not failed and not swallowed', () => {
@@ -128,7 +287,7 @@ test('a cross-service tier standing down is reported, not failed and not swallow
   // against the real Postgres this workflow provides. What stood down was four cases wanting a
   // micro-indexer database as well — a second database no single-service job can offer.
   const ledger = classify(
-    'LEDGER_TEST_DATABASE_URL',
+    ['LEDGER_TEST_DATABASE_URL'],
     '↷ backing # set INDEXER_TEST_DATABASE_URL (name must contain "test") with a micro-indexer checkout beside this one\n',
   )
   assert.equal(ledger.blind, '', 'a tier wanting another service\'s database is not this service failing')
@@ -137,7 +296,7 @@ test('a cross-service tier standing down is reported, not failed and not swallow
   // micro-indexer's message names BOTH variables in one sentence. That is a stand-down too: this
   // job exports the own half itself, so the own half cannot be why anything skipped.
   const indexer = classify(
-    'INDEXER_TEST_DATABASE_URL',
+    ['INDEXER_TEST_DATABASE_URL'],
     '↷ chain backing # set INDEXER_TEST_DATABASE_URL and LEDGER_TEST_DATABASE_URL (both names must contain "test")\n',
   )
   assert.equal(indexer.blind, '')
@@ -146,11 +305,33 @@ test('a cross-service tier standing down is reported, not failed and not swallow
   // Both at once must still be fatal. This is the line between precision and weakening: the
   // stand-down must not become an excuse that swallows a real blind run happening beside it.
   const both = classify(
-    'LEDGER_TEST_DATABASE_URL',
+    ['LEDGER_TEST_DATABASE_URL'],
     '↷ a # set INDEXER_TEST_DATABASE_URL (name must contain "test")\n↷ b # set LEDGER_TEST_DATABASE_URL (name must contain "test")\n',
   )
   assert.match(both.blind, /LEDGER_TEST_DATABASE_URL/, 'a real skip beside a stand-down is still a red build')
   assert.match(both.standdown, /INDEXER_TEST_DATABASE_URL/)
+
+  // ── THE OTHER HALF OF #519's ASYMMETRY ───────────────────────────────────────────────────────
+  //
+  // Widening "own" to a list must not widen it to everything. A merged service still cannot supply
+  // a THIRD service's database, so that tier still stands down — a notice, and green.
+  const foreign = classify(
+    MERGED,
+    '↷ backing # set INDEXER_TEST_DATABASE_URL (name must contain "test") with a micro-indexer checkout beside this one\n',
+  )
+  assert.equal(foreign.blind, '', 'a merged service still does not own micro-indexer\'s database')
+  assert.match(foreign.standdown, /INDEXER_TEST_DATABASE_URL/)
+
+  // And the two verdicts still separate cleanly when both happen in one run: the absorbed
+  // service's own skip is fatal, the foreign tier's is a notice, and neither hides the other.
+  const mixed = classify(
+    MERGED,
+    '↷ a # set INDEXER_TEST_DATABASE_URL (name must contain "test")\n↷ b # set ANALYTICS_TEST_DATABASE_URL (name must contain "test")\n',
+  )
+  assert.match(mixed.blind, /ANALYTICS_TEST_DATABASE_URL/, 'the absorbed service skipping is still a red build')
+  assert.doesNotMatch(mixed.blind, /INDEXER_TEST_DATABASE_URL/)
+  assert.match(mixed.standdown, /INDEXER_TEST_DATABASE_URL/)
+  assert.doesNotMatch(mixed.standdown, /ANALYTICS_TEST_DATABASE_URL/)
 })
 
 /* ------------------------------ the sibling runtime ------------------------------- */
@@ -254,14 +435,23 @@ test('a service with no database keeps the bridge-network path and needs no migr
 /**
  * Rule 1's comparison, lifted out of the workflow so it can be exercised directly. Kept in step
  * with the shell by the test below, which fails if the workflow's expression drifts from this one.
+ *
+ * An ALTERNATION over every prefix the service declares, since micro-org#519: one deployable can be
+ * two former services, and a merged one owns the databases of both. What the rule FORBIDS has not
+ * moved — the namespace it allows has.
  */
-const ALLOWED = (service: string) =>
-  new RegExp(
-    `^${service.toUpperCase().replace(/-/g, '_')}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$`,
-  )
+const ALLOWED = (prefixes: readonly string[]) =>
+  new RegExp(`^(${prefixes.join('|')})_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$`)
+
+/** What a service name derives to when it declares nothing: `hub-api` → `HUB_API`. */
+const prefixOf = (service: string) => service.toUpperCase().replace(/-/g, '_')
 
 const rejected = (service: string, read: readonly string[]) =>
-  read.filter((v) => !ALLOWED(service).test(v))
+  read.filter((v) => !ALLOWED([prefixOf(service)]).test(v))
+
+/** The same judgement for a service that declares its databases explicitly. */
+const rejectedDeclaring = (prefixes: readonly string[], read: readonly string[]) =>
+  read.filter((v) => !ALLOWED(prefixes).test(v))
 
 test('a service reading its own database and its own test database passes', () => {
   assert.deepEqual(rejected('ledger', ['LEDGER_DATABASE_URL', 'LEDGER_TEST_DATABASE_URL']), [])
@@ -295,18 +485,121 @@ test('reading ANOTHER service\'s database is still rejected — the rule keeps i
   assert.deepEqual(rejected('wallet', ['LEDGER_TEST_DATABASE_URL']), ['LEDGER_TEST_DATABASE_URL'])
 })
 
+test('a merged service reads every database it declares, and still no others', () => {
+  // micro-org#519: micro-lantern declares LANTERN_DATABASE_URL and ANALYTICS_DATABASE_URL after the
+  // M1 merge, and both are its own. Before the alternation, the second was another service's
+  // database as far as this rule could tell.
+  assert.deepEqual(
+    rejectedDeclaring(
+      ['LANTERN', 'ANALYTICS'],
+      [
+        'LANTERN_DATABASE_URL',
+        'LANTERN_TEST_DATABASE_URL',
+        'ANALYTICS_DATABASE_URL',
+        'ANALYTICS_TEST_DATABASE_URL',
+      ],
+    ),
+    [],
+  )
+  // The teeth, which are the half worth guarding: widening the namespace to a list must not widen
+  // it to a PREFIX SEARCH. A third service's database is still rejected, and so is a name that
+  // merely begins with a declared one — `ANALYTICS_ARCHIVE_DATABASE_URL` is a different database.
+  assert.deepEqual(
+    rejectedDeclaring(['LANTERN', 'ANALYTICS'], ['CUSTODY_DATABASE_URL', 'ANALYTICS_ARCHIVE_DATABASE_URL']),
+    ['CUSTODY_DATABASE_URL', 'ANALYTICS_ARCHIVE_DATABASE_URL'],
+  )
+})
+
+/**
+ * The `dbvar` step's shell, lifted so the alternation Rule 1 is configured with is the one the
+ * workflow really computes rather than one this file imagines.
+ */
+function stepShell(id: string): string {
+  const at = WORKFLOW.indexOf(`        id: ${id}\n`)
+  assert.ok(at > 0, `no step with \`id: ${id}\` in service-ci.yml`)
+  const opener = '        run: |\n'
+  const runAt = WORKFLOW.indexOf(opener, at)
+  assert.ok(runAt > at, `the \`${id}\` step no longer carries a run: block`)
+  const body: string[] = []
+  for (const line of WORKFLOW.slice(runAt + opener.length).split('\n')) {
+    if (line.trim() !== '' && !line.startsWith(' '.repeat(10))) break
+    body.push(line.slice(10))
+  }
+  return body.join('\n')
+}
+
+/** Run the real `dbvar` step and read back what it wrote to GITHUB_OUTPUT. */
+function runDbvar(
+  service: string,
+  declared: string,
+): { status: number | null; stdout: string; outputs: Record<string, string> } {
+  const file = join(mkdtempSync(join(tmpdir(), 'dbvar-')), 'github-output')
+  writeFileSync(file, '')
+  const res = spawnSync('bash', ['-c', stepShell('dbvar')], {
+    encoding: 'utf8',
+    env: {
+      PATH: process.env['PATH'] ?? '',
+      SERVICE: service,
+      DECLARED: declared,
+      GITHUB_OUTPUT: file,
+    },
+  })
+  const outputs: Record<string, string> = {}
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const kv = /^([a-z_]+)=(.*)$/.exec(line)
+    if (kv?.[1]) outputs[kv[1]] = kv[2] ?? ''
+  }
+  return { status: res.status, stdout: res.stdout + res.stderr, outputs }
+}
+
 test('the workflow\'s own expression matches the one asserted here', () => {
   // If the workflow is edited without editing ALLOWED above, every test in this file goes on
   // passing while testing nothing. This is the line that stops that.
   //
   // The comparison used to be a shell `grep -vxE` against a `$prefix`; it is now the `allow-match:`
   // of a source-scan step (micro-org#303), and the prefix is a step output rather than a shell
-  // variable. The same two halves are asserted: the namespace, and the TEST_ that belongs to it.
-  assert.match(
-    WORKFLOW,
-    /allow-match: '\^\$\{\{ steps\.dbvar\.outputs\.prefix \}\}_\(TEST_\)\?\(DATABASE_URL\|DB_URL\|POSTGRES_URL\)\$'/,
-  )
-  assert.match(WORKFLOW, /echo "prefix=\$\{want%_DATABASE_URL\}"/)
+  // variable. micro-org#519 then made that output an ALTERNATION built by a shell loop — and a
+  // copied literal, which is what stood here, could only ever say that one half had changed. It
+  // could not say whether the two halves still AGREE, which is the thing this test is for.
+  //
+  // So the shipped expression is read out of the file, filled in by running the workflow's own
+  // `dbvar` shell, and compared to the model above. Drift in either half now fails here.
+  const declared = /^\s*allow-match: '(.*\$\{\{ steps\.dbvar\.outputs\.[a-z_]+ \}\}.*)'\s*$/m.exec(WORKFLOW)
+  assert.ok(declared, 'rule 1 no longer has an allow-match parameterised by the dbvar step')
+  const template = declared[1] ?? ''
+
+  for (const [service, input, prefixes] of [
+    ['ledger', '', ['LEDGER']],
+    ['hub-api', '', ['HUB_API']],
+    ['lantern', 'LANTERN_DATABASE_URL ANALYTICS_DATABASE_URL', ['LANTERN', 'ANALYTICS']],
+    ['lantern', 'LANTERN_DATABASE_URL,ANALYTICS_DATABASE_URL', ['LANTERN', 'ANALYTICS']],
+  ] as const) {
+    const step = runDbvar(service, input)
+    assert.equal(step.status, 0, `the dbvar step failed for ${service}: ${step.stdout}`)
+    const shipped = template.replace(
+      /\$\{\{\s*steps\.dbvar\.outputs\.([a-z_]+)\s*\}\}/g,
+      (_m, name: string) => {
+        const value = step.outputs[name]
+        assert.ok(value !== undefined, `the dbvar step emits no \`${name}\` for Rule 1 to read`)
+        return value
+      },
+    )
+    assert.equal(
+      shipped,
+      ALLOWED(prefixes).source,
+      `service-ci.yml judges ${service} by an expression this file does not model`,
+    )
+  }
+})
+
+test('a declared database that is not a database variable is refused, not silently dropped', () => {
+  // A list is a place to typo, and #519 made this input a list. A name that does not end in
+  // _DATABASE_URL contributes a prefix that matches nothing, so Rule 1 would quietly go on
+  // covering only the OTHER names — a guard narrowing itself with nothing said.
+  const bad = runDbvar('lantern', 'LANTERN_DATABASE_URL ANALYTICS_DSN')
+  assert.equal(bad.status, 1, 'a malformed entry must fail the step')
+  assert.match(bad.stdout, /::error::database-env-var entry 'ANALYTICS_DSN' does not end in _DATABASE_URL/)
+  assert.equal(bad.outputs['prefix_alt'], undefined, 'and must not publish a half-built alternation')
 })
 
 /* --------------------------- comment stripping ----------------------- */
