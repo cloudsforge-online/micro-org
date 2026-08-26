@@ -23,7 +23,18 @@ on:
         required: true
         type: string
       database-env-var:
-        description: The ONE database variable this service may read. Defaults to <SERVICE>_DATABASE_URL.
+        # A LIST, whitespace- or comma-separated, since a merged service owns more than one
+        # database. `micro-lantern` declares both LANTERN_DATABASE_URL and ANALYTICS_DATABASE_URL
+        # after the M1 merge, and Rule 1 still holds: a SERVICE owns its databases and reads no
+        # OTHER service's. What changed is that one deployable can be two former services.
+        #
+        # Every name here gets its own CI database, its own exported pair, and — this is the part
+        # that matters — is treated as OWN by the skip scan below. A name absent from this list
+        # skipping is still a cross-service tier standing down; a name present here skipping is
+        # still the disaster.
+        description: >-
+          The database variables this service may read, whitespace- or comma-separated.
+          Defaults to <SERVICE>_DATABASE_URL.
         required: false
         default: ''
         type: string
@@ -780,18 +791,36 @@ jobs:
           NEEDS_DB: ${{ inputs.postgres }}
         run: |
           set -uo pipefail
+          test_vars=''
           if [ "$NEEDS_DB" = "true" ]; then
-            want="$DECLARED"
-            if [ -z "$want" ]; then
-              want="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+            wants="$(printf '%s' "$DECLARED" | tr ',\n' '  ' | tr -s ' ' | sed 's/^ *//; s/ *$//')"
+            if [ -z "$wants" ]; then
+              wants="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
             fi
-            # The suite's variable is the declared one with _TEST_ in it: LEDGER_DATABASE_URL ->
-            # LEDGER_TEST_DATABASE_URL. Both are exported, because migration helpers read the
-            # first and testsupport.ts reads the second.
-            test_var="${want/_DATABASE_URL/_TEST_DATABASE_URL}"
-            echo "database exported as ${want} and ${test_var}"
-            export "$want=$CI_DSN"
-            export "$test_var=$CI_DSN"
+            # ── ONE DATABASE PER DECLARED NAME, NOT ONE SHARED ONE ──────────────────────────
+            #
+            # A merged service owns several databases, and its testsupport truncates each one's
+            # own TABLES between cases. Point two of them at one database and the tables of the
+            # same NAME collide — `lantern.events` and `analytics.events` both exist — so one
+            # suite would truncate the other's rows mid-test. That reads as a flake, not as a
+            # configuration mistake, which is the worst way for it to present.
+            #
+            # The service container creates `ci_test`; the rest are made here. The name keeps
+            # `test` in it because every testsupport.ts in the estate refuses a DSN without it.
+            for w in $wants; do
+              lower="$(printf '%s' "${w%_DATABASE_URL}" | tr '[:upper:]' '[:lower:]')"
+              db="ci_${lower}_test"
+              PGPASSWORD=ci psql -h 127.0.0.1 -U ci -d ci_test -v ON_ERROR_STOP=1 \
+                -c "create database ${db}" >/dev/null 2>&1 || true
+              dsn="postgres://ci:ci@127.0.0.1:5432/${db}"
+              # The suite's variable is the declared one with _TEST_ in it. Both are exported,
+              # because migration helpers read the first and testsupport.ts reads the second.
+              tv="${w/_DATABASE_URL/_TEST_DATABASE_URL}"
+              echo "database ${db} exported as ${w} and ${tv}"
+              export "$w=$dsn"
+              export "$tv=$dsn"
+              test_vars="${test_vars}${test_vars:+ }${tv}"
+            done
             export DATABASE_URL="$CI_DSN"
           fi
 
@@ -833,7 +862,16 @@ jobs:
             while IFS= read -r line; do
               [ -n "$line" ] || continue
               named=$(printf '%s\n' "$line" | grep -oE '[A-Z][A-Z_]*_TEST_DATABASE_URL' | sort -u || true)
-              foreign=$(printf '%s\n' "$named" | grep -vxF "$test_var" || true)
+              # Against EVERY variable this job exported, not just the first. With one name this
+              # is what it always was. With several — a merged service — judging against only the
+              # first would classify the others as foreign, and a skip of a database this job DID
+              # provide would be filed as "a cross-service tier stood down" and go green. That is
+              # precisely the false green this block exists to prevent, reintroduced by the merge
+              # it has to survive.
+              foreign="$named"
+              for tv in $test_vars; do
+                foreign=$(printf '%s\n' "$foreign" | grep -vxF "$tv" || true)
+              done
               if [ -n "$foreign" ]; then
                 standdown="${standdown}${line}"$'\n'
               else
@@ -851,7 +889,7 @@ jobs:
               echo "::error::the database-backed tests SKIPPED — CI would have gone green without running them"
               printf '%s' "$blind"
               echo "The suite could not see a usable DSN. It must contain 'test' in the database name;"
-              echo "check that this service reads ${test_var} and that inputs.service matches."
+              echo "check that this service reads one of: ${test_vars} — and that inputs.service matches."
               exit 1
             fi
           fi
@@ -883,15 +921,28 @@ jobs:
           DECLARED: ${{ inputs.database-env-var }}
         run: |
           set -uo pipefail
-          want="$DECLARED"
-          if [ -z "$want" ]; then
-            want="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
+          # Commas and newlines both separate; the default is still the one derived name.
+          wants="$(printf '%s' "$DECLARED" | tr ',\n' '  ' | tr -s ' ')"
+          wants="$(printf '%s' "$wants" | sed 's/^ *//; s/ *$//')"
+          if [ -z "$wants" ]; then
+            wants="$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_DATABASE_URL"
           fi
+          prefixes=''
+          for w in $wants; do
+            case "$w" in
+              *_DATABASE_URL) : ;;
+              *) echo "::error::database-env-var entry '$w' does not end in _DATABASE_URL"; exit 1 ;;
+            esac
+            prefixes="${prefixes}${prefixes:+|}${w%_DATABASE_URL}"
+          done
           {
-            echo "want=$want"
-            echo "prefix=${want%_DATABASE_URL}"
+            echo "wants=$wants"
+            # First name only, for the messages that name one thing.
+            echo "want=${wants%% *}"
+            # An alternation, so Rule 1's allow-match covers every database this service owns.
+            echo "prefix_alt=$prefixes"
           } >> "$GITHUB_OUTPUT"
-          echo "ok: ${SERVICE} declares ${want}"
+          echo "ok: ${SERVICE} declares ${wants}"
 
       # Every *_DATABASE_URL / *_DB_URL style variable the source reads, judged against the
       # namespace this service owns.
@@ -914,10 +965,10 @@ jobs:
         with:
           paths: ${{ inputs.source-dir }}
           pattern: '\b[A-Z][A-Z0-9_]*_(DATABASE_URL|DB_URL|POSTGRES_URL)\b'
-          allow-match: '^${{ steps.dbvar.outputs.prefix }}_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$'
+          allow-match: '^(${{ steps.dbvar.outputs.prefix_alt }})_(TEST_)?(DATABASE_URL|DB_URL|POSTGRES_URL)$'
           exclude-files: '\.(test|spec)\.'
           title: ${{ inputs.service }} reads a database that is not its own
-          ok: 'ok: reads ${{ steps.dbvar.outputs.want }} and nothing else'
+          ok: 'ok: reads ${{ steps.dbvar.outputs.wants }} and nothing else'
           guidance: |
             Rule 1: a service owns exactly one database and reads no other. The answer to needing
             another service's data is an HTTP call typed by a published contract, never a second DSN.
@@ -1353,8 +1404,17 @@ jobs:
             # where nothing listened — the heart of this defect. `-p` is meaningless under host mode,
             # so it is dropped in favour of the port binding directly on the host.
             net=(--network host)
-            env_args+=(-e "${dbvar}=${dsn}")
-            echo "migrating the schema the service will assert, using the image's own migrator"
+            # One database per declared name, as the test job does and for the same reason: a
+            # merged image runs several migrators, and pointing them at one database makes two
+            # schemas that both own a table called `events` fight over it.
+            for dv in $dbvars; do
+              lower="$(printf '%s' "${dv%_DATABASE_URL}" | tr '[:upper:]' '[:lower:]')"
+              db="ci_${lower}_test"
+              PGPASSWORD=ci psql -h 127.0.0.1 -U ci -d ci_test -v ON_ERROR_STOP=1 \
+                -c "create database ${db}" >/dev/null 2>&1 || true
+              env_args+=(-e "${dv}=postgres://ci:ci@127.0.0.1:5432/${db}")
+            done
+            echo "migrating the schema(s) the service will assert, using the image's own migrator"
             docker run --rm --network host "${env_args[@]}" "$image" $MIGRATE
           fi
 
