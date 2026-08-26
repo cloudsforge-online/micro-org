@@ -889,6 +889,15 @@ export const ALLOWED_SCOPED_PACKAGES: readonly string[] = [
   '@cloudsforge/telemetry',
   '@cloudsforge/http',
   '@cloudsforge/jobs',
+  // Added 2026-08-27, LATE — wave M0 of docs/service-merge-plan.md created the package and had
+  // five services adopt it (wallet, settlement, mint, foresight, faucet) without adding it here or
+  // to service-ci.yml's `allow-match`. Every one of those five then failed Rule 3 with "not a
+  // published contract or runtime package: '@cloudsforge/evm'", which is exactly what the rule is
+  // for — the mistake was declaring the package in one place and importing it in five.
+  //
+  // It qualifies on the list's own test: keccak256 and EIP-55 checksumming, byte-identical
+  // implementations that existed five times over, with no service domain in it.
+  '@cloudsforge/evm',
   '@cloudsforge/auth',
   '@cloudsforge/db',
   '@cloudsforge/lifecycle',

@@ -1049,7 +1049,7 @@ jobs:
         with:
           paths: ${{ inputs.source-dir }}
           pattern: "['\"]@cloudsforge/[a-z0-9-]+['\"]"
-          allow-match: "^['\"]@cloudsforge/(contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|auth|db|lifecycle|secrets|policy-client|ui|ui-charts|sdk|cli|hearth-node|hearth-wallet-core)['\"]$"
+          allow-match: "^['\"]@cloudsforge/(contracts-auth|contracts-money|contracts-chain|contracts-market|contracts-worlds|contracts-create|contracts-events|contracts-devplatform|telemetry|http|jobs|evm|auth|db|lifecycle|secrets|policy-client|ui|ui-charts|sdk|cli|hearth-node|hearth-wallet-core)['\"]$"
           title: not a published contract or runtime package
           ok: 'ok: every @cloudsforge import is a published package'
           guidance: |
