@@ -1302,7 +1302,24 @@ jobs:
           load: true
           tags: ${{ inputs.service }}:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # `ignore-error=true` BECAUSE A CACHE IS AN OPTIMISATION AND THIS JOB IS A GATE.
+          #
+          # Without it, `ERROR: failed to build: failed to solve: error writing layer blob:
+          # failed to reserve cache` fails the whole job — and it did, on micro-lantern run
+          # 32988... and micro-analytics 32989785728/32990158... on 2026-08-26, three times in a
+          # row across two repositories. Nothing was wrong with either Dockerfile. The image never
+          # got built, so the smoke test that is the actual point of this job never ran, and the
+          # PR read as "the image is broken".
+          #
+          # It is not a quota: both repositories were at 0.75 GiB and 0.67 GiB against a 10 GiB
+          # per-repository limit when this was measured. The reservation is being refused by the
+          # cache service itself, and no build input decides that — which is exactly why a build
+          # must not fail on it.
+          #
+          # A cache write that fails now degrades the NEXT build's speed, which is the only thing
+          # it was ever able to affect. `cache-from` needs no such flag: a read miss is already
+          # just a slower build.
+          cache-to: type=gha,mode=max,ignore-error=true
       # A built image proves the Dockerfile parses. It does not prove the image can START, and
       # 'container is unhealthy' with no logs is the shape of silent failure this estate has been
       # bitten by more than once. So: give it a database and its declared config, migrate, start it,
