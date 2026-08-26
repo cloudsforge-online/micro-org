@@ -60,6 +60,14 @@ jobs:
       port: 4102
 ```
 
+`database-env-var` is a **list**, whitespace- or comma-separated, because one deployable can be two
+former services and a merged one owns the databases of both — `micro-lantern` declares
+`LANTERN_DATABASE_URL ANALYTICS_DATABASE_URL` after the M1 merge. Every name gets its own CI
+database and its own exported pair, and every name is treated as this service's OWN by the skip
+scan: a suite gated on any of them skipping fails the build, while a suite wanting a database this
+job does not provide is reported as a stand-down and stays green. Declaring nothing still means
+`<SERVICE>_DATABASE_URL`, and an entry that does not end in `_DATABASE_URL` is refused.
+
 `cfctl doctor` reports any repository that defines its own `runs-on:` as a bespoke CI file. The
 target in `docs/ecosystem/03` §5 is zero of them. A repository that needs something these
 workflows cannot express needs an **input added here**, not a copy.

@@ -522,11 +522,18 @@ type Guard = {
   redFile: string
 }
 
+/**
+ * `prefix_alt` and `wants` are PLURAL since micro-org#519: `database-env-var` became a list, because
+ * a merged deployable owns the databases of the services it absorbed. An unmerged service — which
+ * is every service in the table below — is the one-member case, so these fixtures are unchanged in
+ * what they exercise. The merged case is exercised separately after the table, because a bad
+ * alternation does not stop the rule PASSING, it stops it FAILING.
+ */
 const SERVICE_VALUES = {
   'inputs.source-dir': 'src',
   'inputs.service': 'ledger',
-  'steps.dbvar.outputs.prefix': 'LEDGER',
-  'steps.dbvar.outputs.want': 'LEDGER_DATABASE_URL',
+  'steps.dbvar.outputs.prefix_alt': 'LEDGER',
+  'steps.dbvar.outputs.wants': 'LEDGER_DATABASE_URL',
 }
 
 /**
@@ -721,6 +728,72 @@ describe('every converted guard still catches what it exists to catch', () => {
       assert.match(out, new RegExp(`::error file=${guard.redFile.replace(/[.]/g, '\\.')},line=`))
     })
   }
+})
+
+/**
+ * Rule 1 for a MERGED service, which is the case micro-org#519 added and the table above cannot
+ * carry: the table is keyed by step name, and there is one Rule 1 step.
+ *
+ * It is exercised against the same real step configuration, and in both directions, for the reason
+ * this whole file exists — the hole a bad alternation opens is not that the rule stops passing, it
+ * is that it stops failing. `^(LANTERN|ANALYTICS)_…$` is one edit away from allowing everything.
+ */
+describe('One database, and only its own — for a service that was two of them', () => {
+  const yaml = readFileSync(WORKFLOWS + 'service-ci.yml', 'utf8')
+  const step = stepsUsing(yaml, 'source-scan').find((s) => s.name === 'One database, and only its own')
+
+  // micro-lantern after the M1 merge: one deployable, two former services, two databases.
+  const merged = {
+    ...SERVICE_VALUES,
+    'inputs.service': 'lantern',
+    'steps.dbvar.outputs.prefix_alt': 'LANTERN|ANALYTICS',
+    'steps.dbvar.outputs.wants': 'LANTERN_DATABASE_URL ANALYTICS_DATABASE_URL',
+  }
+
+  it('reads both of the databases it declares, and documents the rule, without failing', () => {
+    assert.ok(step, 'the Rule 1 step has been renamed')
+    const { code, out } = act(
+      tree('green-merged-rule1', {
+        'src/db.ts':
+          '/**\n' +
+          ' * Two databases, because this deployable absorbed micro-analytics — and still never\n' +
+          ' * CUSTODY_DATABASE_URL, which arrives over HTTP typed by @cloudsforge/contracts-money.\n' +
+          ' */\n' +
+          'const events = process.env.LANTERN_DATABASE_URL ?? process.env.LANTERN_TEST_DATABASE_URL\n' +
+          'const rollups = process.env.ANALYTICS_DATABASE_URL ?? process.env.ANALYTICS_TEST_DATABASE_URL\n' +
+          'export { events, rollups }\n',
+      }),
+      resolve(step.with, merged),
+    )
+    assert.equal(code, 0, `a merged service's own databases must not fail the build:\n${out}`)
+  })
+
+  it("and a THIRD service's database is still caught — the alternation is not an amnesty", () => {
+    assert.ok(step)
+    const { code, out } = act(
+      tree('red-merged-rule1', {
+        // After a URL on the same line, as the single-database row does it, so the merged
+        // configuration is held to the string-awareness the other one is.
+        'src/db.ts': "connect('https://lantern.internal', process.env.CUSTODY_DATABASE_URL)\n",
+      }),
+      resolve(step.with, merged),
+    )
+    assert.equal(code, 1, `MUTATION: the alternation has stopped being able to fail\n${out}`)
+    assert.match(out, /::error file=src\/db\.ts,line=/)
+  })
+
+  it('and so is a database whose name merely BEGINS with one it declares', () => {
+    // `ANALYTICS_ARCHIVE_DATABASE_URL` is a different database. The alternation must stay anchored
+    // on both sides; a prefix search would quietly hand a merged service the whole namespace.
+    assert.ok(step)
+    const { code } = act(
+      tree('red-merged-rule1-prefix', {
+        'src/db.ts': 'const cold = process.env.ANALYTICS_ARCHIVE_DATABASE_URL\n',
+      }),
+      resolve(step.with, merged),
+    )
+    assert.equal(code, 1, 'MUTATION: the alternation has become a prefix search')
+  })
 })
 
 describe('the set of guards is complete, so a new one cannot arrive untested', () => {
