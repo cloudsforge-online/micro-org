@@ -78,8 +78,10 @@
 //      `ManagedRepo`. A kept row has a `path`, and it is documentation: nothing turns it into an
 //      absolute path, so nothing can hand it to git. That is why `stackRoot()` is gone — the only
 //      thing it ever did was resolve the three kept rows, and resolving one is now the mistake.
-//   3. **`imageFor` takes a `ManagedRepo`**, so no kept repository can be given a GHCR name, and
-//      `deployableRepos()` returns `ManagedRepo[]`, so none can reach a release manifest.
+//   3. **`imageFor` takes a `ReleasableRepo`**, so no kept repository can be given a GHCR name,
+//      and `releasableRepos()` returns `ReleasableRepo[]`, so none can reach a release manifest.
+//      (It took a `ManagedRepo` when this was written; the type narrowed further when the
+//      absorbed rows arrived, and both refusals are the same mechanism. See `AbsorbedRepo`.)
 //
 // The type only binds rows whose `kind` is `kept`, and a misclassification — giving this
 // directory `kind: 'service'` — would slip past all three. `cfctl.ts` carries the belt for that:
@@ -193,11 +195,27 @@ export type Distribution =
  * does not say where its build is.
  *
  * Nothing else moved. Both members carry every field `ManagedRepo` carried, so every signature in
- * cfctl that takes a `ManagedRepo` — `repoDir`, `inspect`, `imageFor`, `gitWrite`, `cloneUrl` —
- * takes both members unchanged, and `managedRepos()` still returns the one type every write path
- * demands.
+ * cfctl that takes a `ManagedRepo` — `repoDir`, `inspect`, `gitWrite`, `cloneUrl` — takes both
+ * members unchanged, and `managedRepos()` still returns the one type every write path demands.
+ *
+ * ── A THIRD MEMBER SINCE 2026-08-28: THE ROWS WHOSE CODE RUNS SOMEWHERE ELSE ────────────────────
+ *
+ * `AbsorbedRepo` joined it for the reason the split above exists: a state that must not be
+ * writable as a flag. See that interface for the whole argument. `imageFor` no longer takes a
+ * `ManagedRepo` — it takes `ReleasableRepo`, which is this union minus that member.
  */
-export type ManagedRepo = NonClientRepo | ClientRepo;
+export type ManagedRepo = NonClientRepo | ClientRepo | AbsorbedRepo;
+
+/**
+ * A managed repository that still publishes an image of its own, and may therefore be pinned.
+ *
+ * `ManagedRepo` minus `AbsorbedRepo`, written out rather than derived, because this is the type
+ * `imageFor` takes and a reader chasing "what can reach a release manifest" should not have to
+ * evaluate a conditional type to find out. `ClientRepo` is in it and is harmless: `deployable` is
+ * the literal `false` there, so `deployableRepos()` never yields one and `cfctl release` never
+ * asks it for an image.
+ */
+export type ReleasableRepo = NonClientRepo | ClientRepo;
 
 /**
  * Everything managed that is not a client: service, web, ops, library, assets, template, org.
@@ -210,9 +228,25 @@ export type ManagedRepo = NonClientRepo | ClientRepo;
 export interface NonClientRepo extends RepoBase {
   readonly kind: Exclude<ManagedKind, 'client'>;
   readonly managed: true;
-  // Whether a release manifest pins an image for it. Libraries publish packages, assets publish
-  // bytes, and neither publishes an image.
+  /**
+   * Whether this row takes a slot in the derived-port block. Libraries publish packages, assets
+   * publish bytes, and neither publishes an image or binds a port.
+   *
+   * THIS FIELD USED TO SAY "whether a release manifest pins an image for it", AND THAT IS NO
+   * LONGER THE SAME QUESTION. It was one question while the two answers could not differ; the
+   * four absorbed rows are the case where they do, and the comment was silently wrong about them
+   * for as long as it stood. `deployable` decides membership of `deployableRepos()`, which is
+   * where POSITION — and therefore the port — is counted. What a manifest may pin is
+   * `releasableRepos()`, which is that list minus the rows whose code now runs inside another
+   * pod. See `AbsorbedRepo`.
+   */
   readonly deployable: boolean;
+  /**
+   * Never set on this member. Declared so the union above is discriminated on a real field rather
+   * than on a name, and so `repo.absorbedInto` can be READ on a `ManagedRepo` at all — without it
+   * the filter that produces `ReleasableRepo` could not be written as a property test.
+   */
+  readonly absorbedInto?: undefined;
 }
 
 /**
@@ -228,6 +262,8 @@ export interface ClientRepo extends RepoBase {
   readonly managed: true;
   readonly deployable: false;
   readonly distribution: Distribution;
+  /** Never set. See the note on `NonClientRepo.absorbedInto`. A client has no pod to be absorbed into. */
+  readonly absorbedInto?: undefined;
 }
 
 /**
@@ -251,6 +287,96 @@ export interface KeptRepo extends RepoBase {
    * assumes `cloudsforge-online/<repo>` for every row would assume it for `kindred-upstream` too.
    */
   readonly remote: string;
+  /** Never set. See the note on `NonClientRepo.absorbedInto`. Nothing this programme does not manage can be absorbed. */
+  readonly absorbedInto?: undefined;
+}
+
+/**
+ * A repository whose CODE STILL RUNS AND WHOSE IMAGE NO LONGER DOES — it was merged into another
+ * service's pod, and this row is what is left.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * READ THIS BEFORE YOU DELETE ONE OF THESE ROWS. DELETING IT MOVES PORTS.
+ *
+ * Four services were merged into others and the merges are deployed (release 2026.8.103):
+ * `analytics` into `lantern`, `notify` into `activity`, `aetherholm` and `nda` into `emberkin`.
+ * Their compose services are gone, `deploy/scripts/k8s-render.py`'s `MERGED_INTO` emits each as an
+ * ExternalName alias so callers keep resolving, and no pod runs their images.
+ *
+ * The obvious edit is to delete the four rows. **It is the one edit this file cannot afford.**
+ * Ports derive from POSITION in `deployableRepos()` (`portFor` in cfctl.ts: `4100 + index`), so
+ * removing `analytics` at index 21 would pull all thirty rows beneath it down by one, and removing
+ * all four would move forty-odd host ports that `deploy/compose/docker-compose.estate.yml` has
+ * already written down and `deploy/scripts/estate-verify.sh` resolves as `${PB}NNN`. Nothing in
+ * micro-org would notice; the estate would notice at the next deploy, on ports nobody changed.
+ *
+ * ── WHY THIS IS NOT THE TOMBSTONE THE `foresight-admin-web` BLOCK REFUSES ──────────────────────
+ *
+ * That block, further down, weighs the same two options and picks the other one: it deletes the
+ * row, pays seven moved ports, and states plainly that "a tombstone row is worse than the shift"
+ * because holding an index requires `deployable: true`, and `deployableRepos()` is ALSO what
+ * `cfctl release` writes a manifest from — so the tombstone would pin a GHCR tag for a repository
+ * that no longer publishes one.
+ *
+ * That reasoning was correct and its premise has been removed. It rests entirely on one list
+ * answering two questions, and the two questions are now two functions: `deployableRepos()` is
+ * position, `releasableRepos()` is what a manifest may name. A row can hold its index without
+ * being pinned. The choice the earlier block faced no longer exists, which is why this file now
+ * does the thing that block argued against — not because the argument was wrong, but because the
+ * thing that made it true was fixed.
+ *
+ * `foresight-admin-web` is NOT retroactively restored, and the difference is real rather than
+ * convenient: that repository is archived and its ports were already paid for, in the same change,
+ * in micro-deploy. Reinstating it now would move the same seven numbers back.
+ *
+ * ── WHY IT CANNOT BE MARKED ABSORBED AND STILL REACH A MANIFEST ────────────────────────────────
+ *
+ * Three things, and the first two are the type rather than a rule anybody has to remember:
+ *
+ *   1. **`imageFor` takes `ReleasableRepo`, not `ManagedRepo`.** An `AbsorbedRepo` is not
+ *      assignable to it — `absorbedInto: string` against `absorbedInto?: undefined` — so an
+ *      absorbed row CANNOT BE GIVEN A GHCR IMAGE NAME. `ManifestService.image` is required, so a
+ *      manifest entry for one is a compile error and not a review comment. This is the argument
+ *      the header already makes for `kept`, applied to the one other row-shape that must never be
+ *      pinned.
+ *   2. **`deployable: true` IS THE LITERAL, with no constructor parameter.** The port slot is the
+ *      whole reason the row survives, so `absorbed(…, deployable: false)` is not a value that can
+ *      be written. A future tidy-up cannot silently renumber the block by flipping it.
+ *   3. `cfctl bump` and `cfctl release` iterate `releasableRepos()`, and `test/cfctl.test.ts`
+ *      asserts both that the four are absent from a generated manifest and that they still sit at
+ *      their original indices with their original ports.
+ *
+ * ── WHAT AN ABSORBED ROW STILL IS ─────────────────────────────────────────────────────────────
+ *
+ * `managed: true`, and every word of that. cfctl still clones it, still pulls it, still reports it
+ * in `cfctl list` and still runs `doctor` over it. The repository exists, the source is real, and
+ * it is where the absorbed code came from. What stops is the three things that describe a
+ * separately deployed artifact: it is not version-bumped, its image is not published (the publish
+ * job is skipped in `.github/workflows/publish-image.yml`), and it is not pinned in a release.
+ *
+ * ARCHIVING THE GITHUB REPOSITORY IS A SEPARATE AND IRREVERSIBLE STEP, and it is not implied by
+ * this row. When it happens, the row still cannot be deleted — the port hazard above is unchanged
+ * by what GitHub thinks of the repository.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface AbsorbedRepo extends RepoBase {
+  readonly kind: Exclude<ManagedKind, 'client'>;
+  readonly managed: true;
+  /**
+   * The literal `true`, and it is load-bearing rather than vestigial: it is what holds this row's
+   * slot in `deployableRepos()`, and the slot is what holds every port beneath it still. It does
+   * NOT mean a manifest pins an image — see `NonClientRepo.deployable`, which no longer means that
+   * either.
+   */
+  readonly deployable: true;
+  /**
+   * The registry name of the repository whose pod now runs this code. Required, and a name rather
+   * than a boolean, because "absorbed" on its own is the fact that is useless six months later:
+   * the question anyone actually has is where the code went, and `cfctl doctor` prints this
+   * answer where it used to print a warning about a GHCR package that will never be published
+   * again. `test/cfctl.test.ts` requires it to name a real, deployable, non-absorbed row.
+   */
+  readonly absorbedInto: string;
 }
 
 export type Repo = ManagedRepo | KeptRepo;
@@ -265,6 +391,35 @@ function web(name: string, phase: string, owns: string): ManagedRepo {
 
 function ops(name: string, phase: string, owns: string): ManagedRepo {
   return { name, repo: `micro-${name}`, kind: 'ops', phase, path: `micro/${name}`, managed: true, deployable: true, owns };
+}
+
+/**
+ * A row whose code was merged into another service's pod. See `AbsorbedRepo` for the whole
+ * argument, including why the row is not simply deleted.
+ *
+ * A CONSTRUCTOR AND NOT A FIELD ON `service()`, for the reason `kept()` takes no `managed`
+ * parameter: the two states have different consequences and a caller who may pass either will
+ * eventually pass the wrong one. `deployable` is fixed at `true` in the type here and there is no
+ * argument for it, so the port slot cannot be dropped by accident; `into` is required, so
+ * "absorbed into somewhere" is not a value.
+ *
+ * It keeps the row's original `kind` — all four are services and they still ARE services, run by
+ * a different process. A kind of its own would make `cfctl list --kind service` lie about four
+ * repositories and would drop them out of doctor's bespoke-CI check, which still applies: the
+ * source is still there and still builds.
+ */
+function absorbed(name: string, phase: string, into: string, owns: string): AbsorbedRepo {
+  return {
+    name,
+    repo: `micro-${name}`,
+    kind: 'service',
+    phase,
+    path: `micro/${name}`,
+    managed: true,
+    deployable: true,
+    absorbedInto: into,
+    owns,
+  };
 }
 
 function library(name: string, phase: string, owns: string): ManagedRepo {
@@ -402,18 +557,25 @@ export const REGISTRY: readonly Repo[] = [
   service('custody', 'P5', 'HD seeds, key generation, encryption envelope, signing policy, treasury pins, export'),
   service('indexer', 'P5', 'Blocks, transactions, receipts, logs, balances, transfers, reorgs, provider health'),
   service('activity', 'P6', 'Canonical activity records, event inbox, feed cursors, feed query API'),
-  service('notify', 'P13', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
+  // ABSORBED — runs inside `activity`, still holds index 10 and port 4110. Read `AbsorbedRepo`
+  // before touching this line: deleting the row moves every port beneath it. `owns` is unchanged
+  // and still true; what changed is which pod executes it.
+  absorbed('notify', 'P13', 'activity', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
   service('studio', 'P8', 'Brand kits, asset specs, generation jobs, generated assets, generation credits'),
   service('mint', 'P3', 'Token orders, deployment lifecycle, token registry, token pages, contract templates'),
   service('market', 'P9', 'Listings, offers, auctions, orders, escrow refs, collections, moderation, disputes'),
   service('trade', 'P3', 'Strategy catalogue, backtests, bots, fills, allocations, fee settlement, performance'),
   service('worlds', 'P5', 'Title registry, player profile, inventory, achievements, seasons, entitlement bridge'),
-  service('nda', 'P5', 'Ninety Days After: worlds, tiles, players, resolution engine, communes, objectives'),
+  // ABSORBED — runs inside `emberkin`, still holds index 16 and port 4116. See `AbsorbedRepo`.
+  absorbed('nda', 'P5', 'emberkin', 'Ninety Days After: worlds, tiles, players, resolution engine, communes, objectives'),
   service('community', 'P12', 'Communities, roles, treasury accounts, proposals, votes, delegations, timelocks'),
   service('devplatform', 'P11', 'Developer orgs, projects, API keys, OAuth clients, webhooks, quotas, directory'),
   service('hub-api', 'P6', 'Forge Hub BFF: dashboard aggregation, portfolio composition, search, saved views'),
   service('admin-api', 'P13', 'Operator BFF: cross-service actions, approvals, audit mirror, flags, broadcasts'),
-  service('analytics', 'P13', 'Pseudonymised product event store, funnels, cohorts, retention, metric definitions'),
+  // ABSORBED — runs inside `lantern`, still holds index 21 and port 4121. It is the LAST row of
+  // the 03 §1.1 block, so deleting it would move the four services below and everything after
+  // them. See `AbsorbedRepo`.
+  absorbed('analytics', 'P13', 'lantern', 'Pseudonymised product event store, funnels, cohorts, retention, metric definitions'),
 
   // -- 4 further domain services, added by documents 03 does not cover -------------------------
   // 03 §1 predates all four. 18-build-status.md §1 counts 24 domain services against 03's 22 for
@@ -421,7 +583,8 @@ export const REGISTRY: readonly Repo[] = [
   // Dockerfile, so `service` is what they already behave as rather than what this file decided.
   service('emberkin', '19', 'Kindred: authoritative saves, campaign, party, catches, Resonance, battle engine, worlds integration'),
   service('foresight', '19', 'Prediction markets: registry and lifecycle, idea pipeline, contract deployment, positions, resolution, fees'),
-  service('aetherholm', '20', 'World state, cities, economy, fleets, battles, seasons, the chronicle, the title contract'),
+  // ABSORBED — runs inside `emberkin`, still holds index 24 and port 4124. See `AbsorbedRepo`.
+  absorbed('aetherholm', '20', 'emberkin', 'World state, cities, economy, fleets, battles, seasons, the chronicle, the title contract'),
   service('tessera', '23', 'Wards, parcels, claims, objects, placements, the Kiln, presence, the title contract, authorship anchoring'),
 
   // -- 11 frontends (03 §1.2) -----------------------------------------------------------------
@@ -458,7 +621,7 @@ export const REGISTRY: readonly Repo[] = [
   // red go green. micro-deploy's compose pins and `estate-verify.sh` moved in the same change,
   // and `scripts/web-check.py` there proves the two agree.
   //
-  // ── THE ALTERNATIVE WAS A TOMBSTONE ROW, AND IT IS WORSE ────────────────────────────────────
+  // ── THE ALTERNATIVE WAS A TOMBSTONE ROW, AND IT WAS WORSE *THEN* ────────────────────────────
   //
   // A row kept in place purely to hold index 39 would have to stay `deployable: true` to occupy a
   // port at all, because `deployableRepos()` is what the position is counted in. But that list is
@@ -470,6 +633,21 @@ export const REGISTRY: readonly Repo[] = [
   // So the choice was between seven derived numbers moving, which a test names and a script
   // verifies, and a release manifest pinning a retired console, which nothing would catch until a
   // deploy. Seven numbers moved.
+  //
+  // ── AND THE PREMISE WAS REMOVED ON 2026-08-28. DO NOT CITE THIS BLOCK AS PRECEDENT ──────────
+  //
+  // Every word above turns on ONE list answering TWO questions — "where is the port" and "what
+  // does a release pin". They are two functions now: `deployableRepos()` is position,
+  // `releasableRepos()` is what a manifest may name, and `imageFor` takes a type an absorbed row
+  // cannot satisfy. A row CAN now hold its index without being pinned, so the dilemma this block
+  // resolves no longer arises — and four rows (`analytics`, `notify`, `aetherholm`, `nda`) do
+  // exactly the thing it argues against, safely. See `AbsorbedRepo`.
+  //
+  // This row is still not restored, and that is a decision rather than an oversight: the console
+  // is archived, and its seven numbers were already moved and PAID FOR in micro-deploy in the same
+  // change. Putting it back would move the same seven again, to un-fix something that is not
+  // broken. The lesson that survives is the narrow one — deleting a deployable row moves ports —
+  // and it is the reason the four absorbed rows stayed.
   web('aetherholm-web', '20', 'Archipelago map, city view, fleet control, battle reports, chronicle browser'),
   web('tessera-web', '23', 'Isometric renderer, build and place tools, the Kiln, the ward map, Workshop pages'),
 
@@ -830,8 +1008,52 @@ export function managedRepos(): readonly ManagedRepo[] {
   return REGISTRY.filter((repo): repo is ManagedRepo => repo.managed);
 }
 
+/**
+ * THE PORT BLOCK. Membership AND ORDER are a published interface, not an implementation detail.
+ *
+ * `portFor` is `4100 + index in this list`, so this function's output order is written down in
+ * `deploy/compose/docker-compose.estate.yml`, in `deploy/scripts/estate-verify.sh` as `${PB}NNN`,
+ * and in `DERIVED_PORT_ORDER` in test/cfctl.test.ts, which pins every name against its index.
+ * Appending is free. Inserting and DELETING are not, and deleting is the one that looks harmless.
+ *
+ * It still contains the four absorbed rows, and that is the point of them: they hold their slots.
+ * This list is no longer the answer to "what does a release pin" — that is `releasableRepos()`.
+ */
 export function deployableRepos(): readonly ManagedRepo[] {
   return managedRepos().filter((repo) => repo.deployable);
+}
+
+/**
+ * What a release manifest may name, and what `cfctl bump` may version-bump: the port block minus
+ * the rows whose code runs inside somebody else's pod.
+ *
+ * ONE LIST WAS ANSWERING TWO QUESTIONS. `deployableRepos()` decided both "where is this row's
+ * port" and "is this row a separately shipped artifact", which was the same question until four
+ * services were merged into others and stayed in the list to keep their ports. After that it was
+ * the wrong answer to the second question, four times over, on every release: `cfctl bump`
+ * version-bumped four repositories nothing deploys, each push published an image nobody pulls, and
+ * `releases/*.yaml` described a 52-service estate that runs 31 Deployments. A manifest that names
+ * four images no pod runs is the same defect as one that forgets a service — in both cases the
+ * file has stopped being the record of what is deployed.
+ *
+ * `ReleasableRepo[]`, and the filter is what produces the type — the sentence `managedRepos()`
+ * already makes about `managed`. Because `imageFor` takes exactly this type, a row that skips this
+ * function cannot be given an image name to put in a manifest with.
+ */
+export function releasableRepos(): readonly ReleasableRepo[] {
+  return deployableRepos().filter((repo): repo is ReleasableRepo => repo.absorbedInto === undefined);
+}
+
+/**
+ * The rows whose code runs somewhere else, so that "which four, and where did they go" is a
+ * question with one answer rather than a grep.
+ *
+ * Read by `cfctl doctor`, which reports an absorbed row instead of warning that its GHCR package
+ * looks unpublished — a warning that would become true and stay true the moment publishing stops,
+ * and a permanently-true warning is the "check being spent" failure the header describes.
+ */
+export function absorbedRepos(): readonly AbsorbedRepo[] {
+  return managedRepos().filter((repo): repo is AbsorbedRepo => repo.absorbedInto !== undefined);
 }
 
 /**
@@ -856,10 +1078,21 @@ export function repoByName(name: string): Repo | undefined {
   return REGISTRY.find((repo) => repo.name === name);
 }
 
-// `ManagedRepo`, not `Repo`: a kept repository must not be able to acquire a GHCR image name. The
-// name is what a release manifest pins and what `--verify` pulls, so handing one to a repository
-// this organisation does not build is the first half of deploying somebody else's code.
-export function imageFor(repo: ManagedRepo): string {
+// `ReleasableRepo`, not `Repo` and no longer `ManagedRepo`. The name is what a release manifest
+// pins and what `--verify` pulls, so it is refused to both row-shapes that must never be pinned,
+// for two different reasons:
+//
+//   * a KEPT repository, because this organisation does not build it — handing one a GHCR name is
+//     the first half of deploying somebody else's code;
+//   * an ABSORBED repository, because nothing publishes that image any more. `--verify` would pull
+//     a tag that stops moving today and stops resolving whenever the package is cleaned up, and it
+//     would fail on the day of a rollback rather than on the day of the mistake.
+//
+// Refused in the TYPE both times, which is the only way it stays refused: `AbsorbedRepo` carries
+// `absorbedInto: string` and this parameter requires `absorbedInto?: undefined`, so the call does
+// not compile. That is what makes "an absorbed row cannot reach a manifest" a property of the
+// program rather than of the current shape of `cmdRelease`.
+export function imageFor(repo: ReleasableRepo): string {
   return `${REGISTRY_PACKAGE_HOST}/${ORG}/${repo.repo}`;
 }
 

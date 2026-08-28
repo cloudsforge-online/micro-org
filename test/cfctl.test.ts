@@ -28,10 +28,12 @@ import {
 import {
   ALLOWED_SCOPED_PACKAGES,
   REGISTRY,
+  absorbedRepos,
   clientRepos,
   deployableRepos,
   imageFor,
   managedRepos,
+  releasableRepos,
   repoByName,
 } from '../tools/registry.ts';
 
@@ -373,6 +375,162 @@ test('no registry change moves a port that already exists; appending is the only
   );
 });
 
+/**
+ * ── THE PORT MAP ITSELF, MEASURED ON 2026-08-26 AND FROZEN ─────────────────────────────────────
+ *
+ * `DERIVED_PORT_ORDER` above pins the ORDER of `deployableRepos()`. This pins the NUMBERS, which
+ * is not the same assertion and does not have the same failure mode: the order test compares an
+ * array against an array and can be made green by editing the array, which has happened once
+ * already and is documented at length where it happened. This one is a name→port map captured from
+ * the running tool before a change that had no business touching any of them, and every value in
+ * it is a number some other repository has already written down.
+ *
+ * WHY IT WAS ADDED (micro-org, the absorbed-repository change). Four rows — `analytics`, `notify`,
+ * `aetherholm`, `nda` — stopped being bumped, built and released while STAYING in
+ * `deployableRepos()`, because that list is where position is counted and position is the port.
+ * The obvious tidy-up is to delete them, and it silently moves forty-odd host ports; the whole
+ * safety case for that change is that these numbers did not move, so the numbers are written down
+ * rather than argued about.
+ *
+ * WHAT IT DOES NOT FORBID: appending. A new row at the end adds a name this map does not mention
+ * and changes no value in it, which is exactly the freedom the append-only rule buys. What it
+ * catches is a row inserted or REMOVED anywhere above the end — including the removal that looks
+ * like housekeeping.
+ */
+const DERIVED_PORTS: Readonly<Record<string, number>> = {
+  "identity": 4100, "policy": 4101, "ledger": 4102, "wallet": 4103,
+  "settlement": 4104, "pricing": 4105, "billing": 4106, "custody": 4107,
+  "indexer": 4108, "activity": 4109, "notify": 4110, "studio": 4111,
+  "mint": 4112, "market": 4113, "trade": 4114, "worlds": 4115,
+  "nda": 4116, "community": 4117, "devplatform": 4118, "hub-api": 4119,
+  "admin-api": 4120, "analytics": 4121, "emberkin": 4122, "foresight": 4123,
+  "aetherholm": 4124, "tessera": 4125, "hub-web": 4126, "site": 4127,
+  "admin-web": 4128, "mint-web": 4129, "trade-web": 4130, "worlds-web": 4131,
+  "explorer-web": 4132, "network-site": 4133, "market-web": 4134, "devportal-web": 4135,
+  "status-web": 4136, "emberkin-web": 4137, "foresight-web": 4138, "aetherholm-web": 4139,
+  "tessera-web": 4140, "lantern": 4141, "beacon": 4142, "faucet": 4143,
+  "lantern-web": 4144, "beacon-web": 4145, "pool": 4146, "pool-web": 4147,
+  "exchange-web": 4148, "journal-web": 4149, "agora": 4150, "agora-web": 4151,
+};
+
+test('every derived port is the number it was before the absorbed rows left the release', () => {
+  // Reported one row at a time and by both numbers, because "two maps differ" is not the sentence
+  // an operator needs — the useful one names the service and what compose now disagrees with.
+  for (const [name, port] of Object.entries(DERIVED_PORTS)) {
+    assert.equal(
+      portFor(name),
+      port,
+      `'${name}' derived ${port} and now derives ${portFor(name)} — a deployable row was inserted ` +
+        `or removed above it. deploy/compose/docker-compose.estate.yml pins \${CF_PORT_BASE:-4}` +
+        `${String(port).slice(1)} for it and estate-verify.sh resolves the same number.`,
+    );
+  }
+
+  // The map has to keep covering the whole block, or it stops being a safety net the day somebody
+  // deletes a row AND its line here in the same commit. Appending is still free: this is >=.
+  assert.ok(
+    deployableRepos().length >= Object.keys(DERIVED_PORTS).length,
+    `deployableRepos() holds ${deployableRepos().length} rows and this map pins ` +
+      `${Object.keys(DERIVED_PORTS).length}; a row was removed, so ports below it have moved`,
+  );
+  for (const repo of deployableRepos().slice(0, Object.keys(DERIVED_PORTS).length)) {
+    assert.ok(
+      repo.name in DERIVED_PORTS,
+      `'${repo.name}' sits inside the frozen block but is not in this map — it was inserted rather ` +
+        `than appended, and every port below it has moved`,
+    );
+  }
+});
+
+/**
+ * ── AN ABSORBED ROW HOLDS A PORT AND CANNOT REACH A MANIFEST ───────────────────────────────────
+ *
+ * The four services below were merged into other services' pods and the merges are deployed
+ * (release 2026.8.103): their compose services are deleted, `deploy/scripts/k8s-render.py` emits
+ * each as an ExternalName alias, and no pod runs their images. They were nonetheless still full
+ * deployables — `cfctl bump` version-bumped them every release, every push published an image
+ * nobody pulls, and all four appeared in `releases/*.yaml`, which described a 52-service estate
+ * running 31 Deployments.
+ *
+ * The two halves of this test are the two things that had to become true at once, and they pull in
+ * opposite directions — which is the entire reason the change was delicate:
+ *
+ *   * they must STAY in `deployableRepos()`, at their original indices, because that is where the
+ *     port comes from and micro-deploy has written those numbers down;
+ *   * they must LEAVE everything that describes a separately shipped artifact.
+ *
+ * A fix that satisfied only the second half — deleting the rows — passes every test about
+ * manifests and moves forty-odd ports in silence.
+ */
+const ABSORBED: Readonly<Record<string, { into: string; index: number; port: number }>> = {
+  notify: { into: 'activity', index: 10, port: 4110 },
+  nda: { into: 'emberkin', index: 16, port: 4116 },
+  analytics: { into: 'lantern', index: 21, port: 4121 },
+  aetherholm: { into: 'emberkin', index: 24, port: 4124 },
+};
+
+test('an absorbed row keeps its port slot and its index', () => {
+  const order = deployableRepos().map((repo) => repo.name);
+  for (const [name, expected] of Object.entries(ABSORBED)) {
+    const row = repoByName(name);
+    assert.ok(row, `${name} was DELETED from the registry — that moves every port beneath it`);
+    assert.equal(row.deployable, true, `${name} stopped being deployable, which removes it from the port block`);
+    assert.equal(row.absorbedInto, expected.into);
+    assert.equal(order.indexOf(name), expected.index, `${name} moved within deployableRepos()`);
+    assert.equal(portFor(name), expected.port);
+  }
+  assert.equal(absorbedRepos().length, Object.keys(ABSORBED).length);
+});
+
+test('an absorbed row cannot reach a release manifest', () => {
+  // `releasableRepos()` is the list `cmdRelease` iterates and the list `cmdBump` bumps, so this is
+  // the generated manifest's guest list rather than a proxy for it.
+  const releasable = new Set(releasableRepos().map((repo) => repo.name));
+  for (const name of Object.keys(ABSORBED)) {
+    assert.ok(
+      !releasable.has(name),
+      `${name} is absorbed and would still be pinned — a manifest naming an image no pod runs is ` +
+        `the defect this change exists to end`,
+    );
+  }
+  assert.equal(releasable.size, 48, '52 deployables less the four absorbed');
+  assert.equal(deployableRepos().length, 52, 'and the port block is untouched');
+
+  // Every releasable row still resolves to an image, so the filter removed the four and nothing
+  // else. A filter that removed too much would leave a manifest silently short.
+  for (const repo of releasableRepos()) {
+    assert.match(imageFor(repo), /^ghcr\.io\/[^/]+\/micro-[a-z0-9-]+$/);
+  }
+
+  // THE STRUCTURAL HALF, and it is checked by `pnpm typecheck` rather than by this assertion.
+  // `imageFor` takes `ReleasableRepo`; an `AbsorbedRepo` is not assignable to it, so an absorbed
+  // row has no image name to be pinned WITH — the skip in `cmdRelease` is a convenience and this
+  // is the guarantee. If somebody widens `imageFor` back to `ManagedRepo`, the directive below
+  // becomes an unused-expect-error and typecheck goes red naming this line.
+  const merged = absorbedRepos();
+  if (merged.length > 0) {
+    // @ts-expect-error an absorbed repository must never be given a GHCR image name
+    imageFor(merged[0]);
+  }
+});
+
+test('every absorber is a real repository that is itself still shipped', () => {
+  // The failure this catches is a typo or a chain: `absorbedInto: 'lantren'` names nothing, and
+  // `a → b` where `b` is itself absorbed describes a pod that does not exist. Both would make
+  // doctor print a fix nobody can follow.
+  for (const repo of absorbedRepos()) {
+    const into = repoByName(repo.absorbedInto);
+    assert.ok(into, `${repo.name} claims to run inside '${repo.absorbedInto}', which is in no registry row`);
+    assert.equal(into.managed, true, `${repo.name} names an unmanaged absorber`);
+    assert.equal(into.deployable, true, `${repo.name} names an absorber that is not deployed`);
+    assert.equal(
+      into.absorbedInto,
+      undefined,
+      `${repo.name} runs inside ${into.name}, which is itself absorbed — there is no pod at the end of that chain`,
+    );
+  }
+});
+
 test('a directory beside the estate that no row names is reported, not skipped', () => {
   // The crucible bug. Given a fixture rather than the real tree, because in this repository's own
   // CI the only sibling is this repository — and a check that passes vacuously where it runs is
@@ -413,10 +571,37 @@ test("GHCR's token endpoint answer is read the way GHCR means it", () => {
   assert.equal(garbage.token, undefined);
 });
 
-test('every deployable resolves to a GHCR image under the org', () => {
-  for (const repo of deployableRepos()) {
+// `releasableRepos()` rather than `deployableRepos()`, and the change is not a widening of scope
+// to keep a compiler quiet: `imageFor` no longer ACCEPTS a deployable row, because four of them are
+// absorbed and have no image. This assertion moved with the meaning it was always making — "every
+// row a manifest can name resolves to an org image" — and the rows it stopped covering are covered
+// by 'an absorbed row cannot reach a release manifest' above, which asserts they have no image name
+// to resolve at all.
+test('every releasable repository resolves to a GHCR image under the org', () => {
+  for (const repo of releasableRepos()) {
     assert.match(imageFor(repo), /^ghcr\.io\/[^/]+\/micro-[a-z0-9-]+$/);
   }
+});
+
+test('publish-image.yml refuses exactly the absorbed repositories registry.ts names', () => {
+  // A SECOND COPY OF SOMETHING registry.ts OWNS, and therefore a thing to check rather than to
+  // trust. A workflow cannot import TypeScript, so the four repository names have to be written
+  // into the YAML — and this file already knows what that costs: `@cloudsforge/secrets` was added
+  // to service-ci.yml and not to registry.ts, and `cfctl doctor` reported 36 false failures for
+  // four days. Parsed out of the workflow, exactly as the allow-list below it is, so that the
+  // fifth absorbed row cannot be declared in one place and published from the other.
+  const orgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const workflow = readFileSync(path.join(orgRoot, '.github/workflows/publish-image.yml'), 'utf8');
+  const literal = workflow.match(/!contains\(fromJSON\('(\[[^']*\])'\), github\.event\.repository\.name\)/)?.[1];
+  assert.ok(
+    literal,
+    'publish-image.yml no longer refuses the absorbed repositories by name — re-point this test, do not delete it: ' +
+      'without that clause every push to an absorbed repository publishes an image no manifest can name',
+  );
+  assert.deepEqual(
+    [...(JSON.parse(literal) as string[])].sort(),
+    absorbedRepos().map((repo) => repo.repo).sort(),
+  );
 });
 
 test('service-ci.yml enforces exactly the allowlist registry.ts holds', () => {

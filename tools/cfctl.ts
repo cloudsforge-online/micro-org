@@ -54,10 +54,12 @@ import {
   ALLOWED_SCOPED_PACKAGES,
   ORG,
   REGISTRY,
+  absorbedRepos,
   clientRepos,
   deployableRepos,
   imageFor,
   managedRepos,
+  releasableRepos,
   type ClientRepo,
   type Distribution,
   type ManagedRepo,
@@ -895,7 +897,27 @@ export function diagnose(options: { online: boolean }): Diagnosis[] {
 
     // 4. The GHCR 403 trap. A new repository's package inherits the repository's visibility, so
     // the very first deploy after a split 403s on pull with a token that published it fine.
-    if (repo.deployable) {
+    //
+    // ASKED OF ROWS THAT STILL PUBLISH ONE, and an absorbed row does not. The visibility question
+    // is "can a deploy host pull this image", and for these four nothing pulls it and nothing
+    // pushes it any more — so the check has no true answer to give: `--online` would report
+    // whatever the abandoned package happens to be today, and would start reporting
+    // 'private or has never been published' for all four the day the packages are cleaned up. A
+    // warning that becomes permanently true is a warning nobody reads, which is the failure the
+    // five wallet-client FAILs cost this registry once already (see registry.ts's header).
+    //
+    // So it is replaced rather than deleted. Deleting it would leave `cfctl doctor` saying nothing
+    // at all about four managed repositories that look, from every other check, exactly like the
+    // forty-eight that ship — and "an omission that is written down is a decision, and one that is
+    // not is the crucible bug". `info`, not `warn`: nothing here is wrong.
+    if (repo.absorbedInto !== undefined) {
+      findings.push({
+        severity: 'info',
+        repo: name,
+        message: `absorbed into ${repo.absorbedInto} — not bumped, not built, not in a release manifest`,
+        fix: `its code runs in the ${repo.absorbedInto} pod; the row stays in tools/registry.ts because deleting it would move every derived port beneath it`,
+      });
+    } else if (repo.deployable) {
       if (!options.online) {
         findings.push({
           severity: 'info',
@@ -1690,7 +1712,19 @@ function cmdBump(args: Args): number {
 
   const only = args.option('only');
   const names = only === undefined ? undefined : new Set(only.split(','));
-  const repos = deployableRepos().filter((repo) => names === undefined || names.has(repo.name));
+  // `releasableRepos()`, NOT `deployableRepos()`. A bump is the first half of publishing an image:
+  // it writes a version, tags it, and every push to main builds and pushes that tag. An absorbed
+  // repository's code runs inside another pod and nothing pulls its image, so bumping it produced
+  // a version nothing would ever deploy and a tag no manifest would ever name — four of them,
+  // every release. `--only` cannot reach one either, and that is deliberate: naming an absorbed
+  // repository explicitly is the case most likely to be a misunderstanding rather than an
+  // instruction, and it is reported below rather than silently obeyed or silently dropped.
+  const repos = releasableRepos().filter((repo) => names === undefined || names.has(repo.name));
+  // Named, not merely absent. `releases/README.md`'s argument is that "a release where one of the
+  // seven was forgotten looks exactly like a release where it was not" — and a release that
+  // silently skips four repositories looks exactly like one that silently missed them. So the
+  // skip is printed with the reason, every run.
+  const skipped = absorbedRepos().filter((repo) => names === undefined || names.has(repo.name));
 
   const bumped: string[] = [];
   const already: string[] = [];
@@ -1821,10 +1855,14 @@ function cmdBump(args: Args): number {
   for (const name of already) process.stdout.write(`  already  ${name} is ${version}, tagged ${tag}\n`);
   for (const name of absent) process.stdout.write(`  absent   ${name}\n`);
   for (const line of refused) process.stdout.write(`  REFUSED  ${line}\n`);
+  for (const repo of skipped) {
+    process.stdout.write(`  absorbed ${repo.name} runs inside ${repo.absorbedInto}; nothing deploys its image\n`);
+  }
 
   process.stdout.write(
     `\n${bumped.length} bumped, ${already.length} already at ${version}, ${absent.length} absent, ` +
-      `${refused.length} refused, of ${repos.length} deployables\n`,
+      `${refused.length} refused, of ${repos.length} releasable repositories` +
+      (skipped.length > 0 ? ` (${skipped.length} absorbed, not bumped)\n` : '\n'),
   );
 
   // A refusal is an ERROR rather than a note, and this is the whole point of the command. The
@@ -1875,8 +1913,17 @@ function cmdRelease(args: Args): number {
   const services: ManifestService[] = [];
   const absent: string[] = [];
   const unresolved: string[] = [];
-  process.stdout.write(`asking GHCR what each tag resolves to (up to ${deployableRepos().length} lookups)\n`);
-  for (const repo of deployableRepos()) {
+  // `releasableRepos()`, NOT `deployableRepos()`. A manifest is the record of what is deployed, and
+  // the four absorbed repositories are not: their code runs inside another service's pod, their
+  // compose services are gone, and `deploy/scripts/k8s-render.py` emits each as an ExternalName
+  // alias rather than a Deployment. Pinning them made this file describe a 52-service estate that
+  // runs 31 Deployments — four entries whose images would go stale, then unpullable, and take
+  // `--verify` red with them on the day somebody needed a rollback.
+  //
+  // It is not merely that this loop skips them: `imageFor` will not accept one, so an absorbed row
+  // has no image name to be pinned WITH. See `AbsorbedRepo` in registry.ts.
+  process.stdout.write(`asking GHCR what each tag resolves to (up to ${releasableRepos().length} lookups)\n`);
+  for (const repo of releasableRepos()) {
     const checkout = inspect(repo);
     if (checkout.state === 'absent' || checkout.state === 'not-a-repo') {
       absent.push(repo.name);
@@ -1913,7 +1960,7 @@ function cmdRelease(args: Args): number {
 
   if (services.length === 0) {
     process.stderr.write(
-      `cfctl: nothing to release — none of the ${deployableRepos().length} deployables is checked out.\n` +
+      `cfctl: nothing to release — none of the ${releasableRepos().length} releasable repositories is checked out.\n` +
         'A manifest that names no image is not a release, and writing one would put a file in\n' +
         'releases/ that a deploy could read and act on.\n',
     );
@@ -1932,6 +1979,18 @@ function cmdRelease(args: Args): number {
   process.stdout.write(`wrote ${path.relative(process.cwd(), file)}: ${services.length} services pinned`);
   process.stdout.write(absent.length > 0 ? `, ${absent.length} absent\n` : '\n');
   process.stdout.write(`${withDigest} of ${services.length} entries name an image digest\n`);
+
+  // SAID AT THE CUT, for the reason the client note below is: an operator reading a manifest can
+  // see what it names and cannot see what it deliberately does not. Four rows are in the port
+  // block and out of this file on purpose, and a reader who counts 48 against a registry of 52
+  // deserves the answer here rather than in a git log.
+  const merged = absorbedRepos();
+  if (merged.length > 0) {
+    process.stdout.write(
+      `${merged.length} absorbed repositories are deliberately not pinned: ` +
+        `${merged.map((repo) => `${repo.name} → ${repo.absorbedInto}`).join(', ')}\n`,
+    );
+  }
 
   // NOT a failure, and the reasoning is worth having in one place. An image publishes from the
   // push, so a manifest cut in the minutes before its builds finish has tags that resolve to
