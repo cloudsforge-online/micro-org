@@ -181,8 +181,38 @@ jobs:
     # `feat/`, which costs the honesty of the branch name and buys nothing.
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
+    #
+    # ── AND FOUR REPOSITORIES ARE REFUSED WHATEVER BRANCH THEY PUSH ────────────────────────────
+    #
+    # `micro-analytics`, `micro-notify`, `micro-aetherholm` and `micro-nda` were merged into other
+    # services and the merges are deployed: their code runs in the `lantern`, `activity`,
+    # `emberkin` and `emberkin` pods, their compose services are deleted, and
+    # `deploy/scripts/k8s-render.py` emits each as an ExternalName alias rather than a Deployment.
+    # Nothing pulls their images. Every push was still building and pushing one — a package that
+    # cannot be deployed, cannot be rolled back to, and exists only to be mistaken for something
+    # that ships. `cfctl release` stopped pinning them (org/tools/registry.ts, `AbsorbedRepo`);
+    # this is the other half, and without it the estate would keep publishing artefacts no manifest
+    # can name, which is the inverse of the defect `releases/README.md` is about.
+    #
+    # SKIPPED, NOT FAILED. A red build on every push to four repositories whose source is still
+    # perfectly good is a permanent failure, and registry.ts's header spends a page on what those
+    # cost: "a failure that is always there is a failure nobody reads". The gate builds in
+    # `service-ci.yml` still run on all four, so the code is still tested — only the publish is
+    # withheld.
+    #
+    # THE LIST IS DUPLICATED HERE AND THE DUPLICATE IS CHECKED. A workflow cannot import
+    # TypeScript, so this is a second copy of something registry.ts owns — the exact shape of the
+    # `@cloudsforge/secrets` drift that gave `cfctl doctor` 36 false failures for four days. So it
+    # is parsed rather than trusted: `test/cfctl.test.ts` reads this array out of this file and
+    # requires it to be exactly `absorbedRepos()`, the same way it already does for
+    # `service-ci.yml`'s scope allow-list. Adding a fifth absorbed row without touching this line
+    # is a red in micro-org, not a mystery image six months later.
+    #
+    # `github.event.repository.name` is the CALLER's repository — this is a reusable workflow, and
+    # `github.*` in one refers to the caller. It is the same object the fork check above reads.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
+      !contains(fromJSON('["micro-analytics", "micro-notify", "micro-aetherholm", "micro-nda"]'), github.event.repository.name) &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
       startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/') ||
       startsWith(github.ref, 'refs/heads/fix/'))
