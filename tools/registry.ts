@@ -548,11 +548,11 @@ const ORG_REMOTE = (repo: string): string => `https://github.com/cloudsforge-onl
 export const REGISTRY: readonly Repo[] = [
   // -- 22 domain services (03 §1.1) -----------------------------------------------------------
   service('identity', 'P3', 'Accounts, credentials, MFA, sessions, devices, SSO exchange, JWKS, orgs, consents'),
-  service('policy', 'P5', 'Rules, limits, velocity counters, trusted addresses, cooling-off, approvals, freezes'),
+  absorbed('policy', 'P5', 'agora', 'Rules, limits, velocity counters, trusted addresses, cooling-off, approvals, freezes'),
   service('ledger', 'P4', 'Chart of accounts, journal, postings, balances projection, reservations, reconciliation'),
   service('wallet', 'P4', 'Wallet registry, external links, deposit addresses, withdrawals, conversions, portfolio'),
   service('settlement', 'P4', 'Treasuries, sweeps, outbound transactions, broadcast, confirmation tracking'),
-  service('pricing', 'P4', 'Market sources, median oracle, administered prices, rate history, valuation'),
+  absorbed('pricing', 'P4', 'agora', 'Market sources, median oracle, administered prices, rate history, valuation'),
   service('billing', 'P4', 'Products, prices, entitlements, subscriptions, usage, invoices, payouts, revenue share'),
   service('custody', 'P5', 'HD seeds, key generation, encryption envelope, signing policy, treasury pins, export'),
   service('indexer', 'P5', 'Blocks, transactions, receipts, logs, balances, transfers, reorgs, provider health'),
@@ -561,7 +561,7 @@ export const REGISTRY: readonly Repo[] = [
   // before touching this line: deleting the row moves every port beneath it. `owns` is unchanged
   // and still true; what changed is which pod executes it.
   absorbed('notify', 'P13', 'activity', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
-  service('studio', 'P8', 'Brand kits, asset specs, generation jobs, generated assets, generation credits'),
+  absorbed('studio', 'P8', 'agora', 'Brand kits, asset specs, generation jobs, generated assets, generation credits'),
   service('mint', 'P3', 'Token orders, deployment lifecycle, token registry, token pages, contract templates'),
   service('market', 'P9', 'Listings, offers, auctions, orders, escrow refs, collections, moderation, disputes'),
   service('trade', 'P3', 'Strategy catalogue, backtests, bots, fills, allocations, fee settlement, performance'),
@@ -569,7 +569,7 @@ export const REGISTRY: readonly Repo[] = [
   // ABSORBED — runs inside `emberkin`, still holds index 16 and port 4116. See `AbsorbedRepo`.
   absorbed('nda', 'P5', 'emberkin', 'Ninety Days After: worlds, tiles, players, resolution engine, communes, objectives'),
   service('community', 'P12', 'Communities, roles, treasury accounts, proposals, votes, delegations, timelocks'),
-  service('devplatform', 'P11', 'Developer orgs, projects, API keys, OAuth clients, webhooks, quotas, directory'),
+  absorbed('devplatform', 'P11', 'agora', 'Developer orgs, projects, API keys, OAuth clients, webhooks, quotas, directory'),
   service('hub-api', 'P6', 'Forge Hub BFF: dashboard aggregation, portfolio composition, search, saved views'),
   service('admin-api', 'P13', 'Operator BFF: cross-service actions, approvals, audit mirror, flags, broadcasts'),
   // ABSORBED — runs inside `lantern`, still holds index 21 and port 4121. It is the LAST row of
