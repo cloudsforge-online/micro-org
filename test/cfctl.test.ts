@@ -463,8 +463,13 @@ test('every derived port is the number it was before the absorbed rows left the 
  * manifests and moves forty-odd ports in silence.
  */
 const ABSORBED: Readonly<Record<string, { into: string; index: number; port: number }>> = {
+  // Wave M5a folded the four platform-tier services into agora — see registry.ts.
+  policy: { into: 'agora', index: 1, port: 4101 },
+  pricing: { into: 'agora', index: 5, port: 4105 },
   notify: { into: 'activity', index: 10, port: 4110 },
+  studio: { into: 'agora', index: 11, port: 4111 },
   nda: { into: 'emberkin', index: 16, port: 4116 },
+  devplatform: { into: 'agora', index: 18, port: 4118 },
   analytics: { into: 'lantern', index: 21, port: 4121 },
   aetherholm: { into: 'emberkin', index: 24, port: 4124 },
 };
@@ -493,7 +498,7 @@ test('an absorbed row cannot reach a release manifest', () => {
         `the defect this change exists to end`,
     );
   }
-  assert.equal(releasable.size, 48, '52 deployables less the four absorbed');
+  assert.equal(releasable.size, 44, '52 deployables less the eight absorbed');
   assert.equal(deployableRepos().length, 52, 'and the port block is untouched');
 
   // Every releasable row still resolves to an image, so the filter removed the four and nothing

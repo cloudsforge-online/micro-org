@@ -182,11 +182,12 @@ jobs:
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     #
-    # ── AND FOUR REPOSITORIES ARE REFUSED WHATEVER BRANCH THEY PUSH ────────────────────────────
+    # ── AND EIGHT REPOSITORIES ARE REFUSED WHATEVER BRANCH THEY PUSH ───────────────────────────
     #
-    # `micro-analytics`, `micro-notify`, `micro-aetherholm` and `micro-nda` were merged into other
+    # `micro-analytics`, `micro-notify`, `micro-aetherholm`, `micro-nda`, and — wave M5a —
+    # `micro-policy`, `micro-pricing`, `micro-studio` and `micro-devplatform` were merged into other
     # services and the merges are deployed: their code runs in the `lantern`, `activity`,
-    # `emberkin` and `emberkin` pods, their compose services are deleted, and
+    # `emberkin`, `emberkin` and (the last four) `agora` pods, their compose services are deleted, and
     # `deploy/scripts/k8s-render.py` emits each as an ExternalName alias rather than a Deployment.
     # Nothing pulls their images. Every push was still building and pushing one — a package that
     # cannot be deployed, cannot be rolled back to, and exists only to be mistaken for something
@@ -212,7 +213,7 @@ jobs:
     # `github.*` in one refers to the caller. It is the same object the fork check above reads.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
-      !contains(fromJSON('["micro-analytics", "micro-notify", "micro-aetherholm", "micro-nda"]'), github.event.repository.name) &&
+      !contains(fromJSON('["micro-analytics", "micro-notify", "micro-aetherholm", "micro-nda", "micro-policy", "micro-pricing", "micro-studio", "micro-devplatform"]'), github.event.repository.name) &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
       startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/') ||
       startsWith(github.ref, 'refs/heads/fix/'))
