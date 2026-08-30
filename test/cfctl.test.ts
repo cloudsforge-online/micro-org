@@ -468,7 +468,8 @@ const ABSORBED: Readonly<Record<string, { into: string; index: number; port: num
   // Wave M5b folded the commerce/games tier into agora too — twelve modules.
   billing: { into: 'agora', index: 6, port: 4106 },
   pricing: { into: 'agora', index: 5, port: 4105 },
-  notify: { into: 'activity', index: 10, port: 4110 },
+  activity: { into: 'agora', index: 9, port: 4109 },
+  notify: { into: 'agora', index: 10, port: 4110 },
   studio: { into: 'agora', index: 11, port: 4111 },
   mint: { into: 'agora', index: 12, port: 4112 },
   market: { into: 'agora', index: 13, port: 4113 },
@@ -476,10 +477,14 @@ const ABSORBED: Readonly<Record<string, { into: string; index: number; port: num
   community: { into: 'agora', index: 17, port: 4117 },
   nda: { into: 'emberkin', index: 16, port: 4116 },
   devplatform: { into: 'agora', index: 18, port: 4118 },
-  analytics: { into: 'lantern', index: 21, port: 4121 },
+  analytics: { into: 'agora', index: 21, port: 4121 },
   foresight: { into: 'agora', index: 23, port: 4123 },
   aetherholm: { into: 'emberkin', index: 24, port: 4124 },
   tessera: { into: 'agora', index: 25, port: 4125 },
+  // Wave M5c. notify and analytics FLATTENED to agora with them: after this
+  // wave there is no activity pod and no lantern pod, so naming either as an
+  // absorber would be false — and the chain assertion below forbids it.
+  lantern: { into: 'agora', index: 41, port: 4141 },
 };
 
 test('an absorbed row keeps its port slot and its index', () => {
@@ -506,7 +511,7 @@ test('an absorbed row cannot reach a release manifest', () => {
         `the defect this change exists to end`,
     );
   }
-  assert.equal(releasable.size, 37, '52 deployables less the fifteen absorbed');
+  assert.equal(releasable.size, 35, '52 deployables less the seventeen absorbed');
   assert.equal(deployableRepos().length, 52, 'and the port block is untouched');
 
   // Every releasable row still resolves to an image, so the filter removed the four and nothing
