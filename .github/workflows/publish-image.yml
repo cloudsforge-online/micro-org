@@ -182,7 +182,7 @@ jobs:
     #
     # Every other branch is still refused, and a fork still cannot reach here at all.
     #
-    # ── AND EIGHT REPOSITORIES ARE REFUSED WHATEVER BRANCH THEY PUSH ───────────────────────────
+    # ── AND FIFTEEN REPOSITORIES ARE REFUSED WHATEVER BRANCH THEY PUSH ─────────────────────────
     #
     # `micro-analytics`, `micro-notify`, `micro-aetherholm`, `micro-nda`, and — wave M5a —
     # `micro-policy`, `micro-pricing`, `micro-studio` and `micro-devplatform` were merged into other
@@ -213,7 +213,7 @@ jobs:
     # `github.*` in one refers to the caller. It is the same object the fork check above reads.
     if: >-
       github.event_name == 'push' && !github.event.repository.fork &&
-      !contains(fromJSON('["micro-analytics", "micro-notify", "micro-aetherholm", "micro-nda", "micro-policy", "micro-pricing", "micro-studio", "micro-devplatform"]'), github.event.repository.name) &&
+      !contains(fromJSON('["micro-analytics", "micro-notify", "micro-aetherholm", "micro-nda", "micro-policy", "micro-pricing", "micro-studio", "micro-devplatform", "micro-community", "micro-market", "micro-billing", "micro-mint", "micro-foresight", "micro-worlds", "micro-tessera"]'), github.event.repository.name) &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design-system/') ||
       startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/feat/') ||
       startsWith(github.ref, 'refs/heads/fix/'))
