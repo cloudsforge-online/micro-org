@@ -465,13 +465,21 @@ test('every derived port is the number it was before the absorbed rows left the 
 const ABSORBED: Readonly<Record<string, { into: string; index: number; port: number }>> = {
   // Wave M5a folded the four platform-tier services into agora — see registry.ts.
   policy: { into: 'agora', index: 1, port: 4101 },
+  // Wave M5b folded the commerce/games tier into agora too — twelve modules.
+  billing: { into: 'agora', index: 6, port: 4106 },
   pricing: { into: 'agora', index: 5, port: 4105 },
   notify: { into: 'activity', index: 10, port: 4110 },
   studio: { into: 'agora', index: 11, port: 4111 },
+  mint: { into: 'agora', index: 12, port: 4112 },
+  market: { into: 'agora', index: 13, port: 4113 },
+  worlds: { into: 'agora', index: 15, port: 4115 },
+  community: { into: 'agora', index: 17, port: 4117 },
   nda: { into: 'emberkin', index: 16, port: 4116 },
   devplatform: { into: 'agora', index: 18, port: 4118 },
   analytics: { into: 'lantern', index: 21, port: 4121 },
+  foresight: { into: 'agora', index: 23, port: 4123 },
   aetherholm: { into: 'emberkin', index: 24, port: 4124 },
+  tessera: { into: 'agora', index: 25, port: 4125 },
 };
 
 test('an absorbed row keeps its port slot and its index', () => {
@@ -498,7 +506,7 @@ test('an absorbed row cannot reach a release manifest', () => {
         `the defect this change exists to end`,
     );
   }
-  assert.equal(releasable.size, 44, '52 deployables less the eight absorbed');
+  assert.equal(releasable.size, 37, '52 deployables less the fifteen absorbed');
   assert.equal(deployableRepos().length, 52, 'and the port block is untouched');
 
   // Every releasable row still resolves to an image, so the filter removed the four and nothing

@@ -553,7 +553,7 @@ export const REGISTRY: readonly Repo[] = [
   service('wallet', 'P4', 'Wallet registry, external links, deposit addresses, withdrawals, conversions, portfolio'),
   service('settlement', 'P4', 'Treasuries, sweeps, outbound transactions, broadcast, confirmation tracking'),
   absorbed('pricing', 'P4', 'agora', 'Market sources, median oracle, administered prices, rate history, valuation'),
-  service('billing', 'P4', 'Products, prices, entitlements, subscriptions, usage, invoices, payouts, revenue share'),
+  absorbed('billing', 'P4', 'agora', 'Products, prices, entitlements, subscriptions, usage, invoices, payouts, revenue share'),
   service('custody', 'P5', 'HD seeds, key generation, encryption envelope, signing policy, treasury pins, export'),
   service('indexer', 'P5', 'Blocks, transactions, receipts, logs, balances, transfers, reorgs, provider health'),
   service('activity', 'P6', 'Canonical activity records, event inbox, feed cursors, feed query API'),
@@ -562,13 +562,13 @@ export const REGISTRY: readonly Repo[] = [
   // and still true; what changed is which pod executes it.
   absorbed('notify', 'P13', 'activity', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
   absorbed('studio', 'P8', 'agora', 'Brand kits, asset specs, generation jobs, generated assets, generation credits'),
-  service('mint', 'P3', 'Token orders, deployment lifecycle, token registry, token pages, contract templates'),
-  service('market', 'P9', 'Listings, offers, auctions, orders, escrow refs, collections, moderation, disputes'),
+  absorbed('mint', 'P3', 'agora', 'Token orders, deployment lifecycle, token registry, token pages, contract templates'),
+  absorbed('market', 'P9', 'agora', 'Listings, offers, auctions, orders, escrow refs, collections, moderation, disputes'),
   service('trade', 'P3', 'Strategy catalogue, backtests, bots, fills, allocations, fee settlement, performance'),
-  service('worlds', 'P5', 'Title registry, player profile, inventory, achievements, seasons, entitlement bridge'),
+  absorbed('worlds', 'P5', 'agora', 'Title registry, player profile, inventory, achievements, seasons, entitlement bridge'),
   // ABSORBED — runs inside `emberkin`, still holds index 16 and port 4116. See `AbsorbedRepo`.
   absorbed('nda', 'P5', 'emberkin', 'Ninety Days After: worlds, tiles, players, resolution engine, communes, objectives'),
-  service('community', 'P12', 'Communities, roles, treasury accounts, proposals, votes, delegations, timelocks'),
+  absorbed('community', 'P12', 'agora', 'Communities, roles, treasury accounts, proposals, votes, delegations, timelocks'),
   absorbed('devplatform', 'P11', 'agora', 'Developer orgs, projects, API keys, OAuth clients, webhooks, quotas, directory'),
   service('hub-api', 'P6', 'Forge Hub BFF: dashboard aggregation, portfolio composition, search, saved views'),
   service('admin-api', 'P13', 'Operator BFF: cross-service actions, approvals, audit mirror, flags, broadcasts'),
@@ -582,10 +582,10 @@ export const REGISTRY: readonly Repo[] = [
   // exactly this reason, and each of these calls the reusable `service-ci.yml` and ships a
   // Dockerfile, so `service` is what they already behave as rather than what this file decided.
   service('emberkin', '19', 'Kindred: authoritative saves, campaign, party, catches, Resonance, battle engine, worlds integration'),
-  service('foresight', '19', 'Prediction markets: registry and lifecycle, idea pipeline, contract deployment, positions, resolution, fees'),
+  absorbed('foresight', '19', 'agora', 'Prediction markets: registry and lifecycle, idea pipeline, contract deployment, positions, resolution, fees'),
   // ABSORBED — runs inside `emberkin`, still holds index 24 and port 4124. See `AbsorbedRepo`.
   absorbed('aetherholm', '20', 'emberkin', 'World state, cities, economy, fleets, battles, seasons, the chronicle, the title contract'),
-  service('tessera', '23', 'Wards, parcels, claims, objects, placements, the Kiln, presence, the title contract, authorship anchoring'),
+  absorbed('tessera', '23', 'agora', 'Wards, parcels, claims, objects, placements, the Kiln, presence, the title contract, authorship anchoring'),
 
   // -- 11 frontends (03 §1.2) -----------------------------------------------------------------
   web('hub-web', 'P6', 'Forge Hub: dashboard, portfolio, wallet, activity, settings, security, entitlements'),
