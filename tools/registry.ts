@@ -408,11 +408,21 @@ function ops(name: string, phase: string, owns: string): ManagedRepo {
  * repositories and would drop them out of doctor's bespoke-CI check, which still applies: the
  * source is still there and still builds.
  */
-function absorbed(name: string, phase: string, into: string, owns: string): AbsorbedRepo {
+function absorbed(
+  name: string,
+  phase: string,
+  into: string,
+  owns: string,
+  // Wave M5c absorbed `lantern`, which is an `ops` repository rather than a
+  // service. Defaulting to 'service' keeps every existing call identical; passing
+  // it explicitly stops an absorbed ops repo from silently becoming a service,
+  // which is a fact other readers group by.
+  kind: AbsorbedRepo['kind'] = 'service',
+): AbsorbedRepo {
   return {
     name,
     repo: `micro-${name}`,
-    kind: 'service',
+    kind,
     phase,
     path: `micro/${name}`,
     managed: true,
@@ -556,11 +566,11 @@ export const REGISTRY: readonly Repo[] = [
   absorbed('billing', 'P4', 'agora', 'Products, prices, entitlements, subscriptions, usage, invoices, payouts, revenue share'),
   service('custody', 'P5', 'HD seeds, key generation, encryption envelope, signing policy, treasury pins, export'),
   service('indexer', 'P5', 'Blocks, transactions, receipts, logs, balances, transfers, reorgs, provider health'),
-  service('activity', 'P6', 'Canonical activity records, event inbox, feed cursors, feed query API'),
+  absorbed('activity', 'P6', 'agora', 'Canonical activity records, event inbox, feed cursors, feed query API'),
   // ABSORBED — runs inside `activity`, still holds index 10 and port 4110. Read `AbsorbedRepo`
   // before touching this line: deleting the row moves every port beneath it. `owns` is unchanged
   // and still true; what changed is which pod executes it.
-  absorbed('notify', 'P13', 'activity', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
+  absorbed('notify', 'P13', 'agora', 'Preferences, templates, notifications, deliveries, digests, webhooks, broadcasts'),
   absorbed('studio', 'P8', 'agora', 'Brand kits, asset specs, generation jobs, generated assets, generation credits'),
   absorbed('mint', 'P3', 'agora', 'Token orders, deployment lifecycle, token registry, token pages, contract templates'),
   absorbed('market', 'P9', 'agora', 'Listings, offers, auctions, orders, escrow refs, collections, moderation, disputes'),
@@ -575,7 +585,7 @@ export const REGISTRY: readonly Repo[] = [
   // ABSORBED — runs inside `lantern`, still holds index 21 and port 4121. It is the LAST row of
   // the 03 §1.1 block, so deleting it would move the four services below and everything after
   // them. See `AbsorbedRepo`.
-  absorbed('analytics', 'P13', 'lantern', 'Pseudonymised product event store, funnels, cohorts, retention, metric definitions'),
+  absorbed('analytics', 'P13', 'agora', 'Pseudonymised product event store, funnels, cohorts, retention, metric definitions'),
 
   // -- 4 further domain services, added by documents 03 does not cover -------------------------
   // 03 §1 predates all four. 18-build-status.md §1 counts 24 domain services against 03's 22 for
@@ -665,7 +675,7 @@ export const REGISTRY: readonly Repo[] = [
   //
   // Both are `adminOnly` in `ui/packages/ui/src/surfaces.ts` and both now render the shared footer.
   // -- 3 operations services (03 §1.3) --------------------------------------------------------
-  ops('lantern', 'P3', 'Log triage: OTLP push ingest, fingerprinting, browser errors and RUM'),
+  absorbed('lantern', 'P3', 'agora', 'Log triage: OTLP push ingest, fingerprinting, browser errors and RUM', 'ops'),
   ops('beacon', 'P3', 'Synthetic monitoring, journeys, incidents, SLOs. The release gate (AD-04)'),
   ops('faucet', 'P3', 'Testnet EMBER faucet'),
 
