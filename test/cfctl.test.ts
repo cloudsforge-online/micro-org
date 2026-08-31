@@ -475,16 +475,26 @@ const ABSORBED: Readonly<Record<string, { into: string; index: number; port: num
   market: { into: 'agora', index: 13, port: 4113 },
   worlds: { into: 'agora', index: 15, port: 4115 },
   community: { into: 'agora', index: 17, port: 4117 },
-  nda: { into: 'emberkin', index: 16, port: 4116 },
+  nda: { into: 'agora', index: 16, port: 4116 },
   devplatform: { into: 'agora', index: 18, port: 4118 },
   analytics: { into: 'agora', index: 21, port: 4121 },
   foresight: { into: 'agora', index: 23, port: 4123 },
-  aetherholm: { into: 'emberkin', index: 24, port: 4124 },
+  aetherholm: { into: 'agora', index: 24, port: 4124 },
   tessera: { into: 'agora', index: 25, port: 4125 },
   // Wave M5c. notify and analytics FLATTENED to agora with them: after this
   // wave there is no activity pod and no lantern pod, so naming either as an
   // absorber would be false — and the chain assertion below forbids it.
   lantern: { into: 'agora', index: 41, port: 4141 },
+  // Wave M5d, and the wave that takes the estate under twenty containers. Five more rows, and
+  // TWO EXISTING ONES RE-POINTED: `nda` and `aetherholm` named `emberkin` as their absorber until
+  // this wave, and emberkin is itself absorbed now. A nested absorption is FLATTENED here for the
+  // same reason `merge_target()` flattens the DNS chain in `k8s-render.py` — naming a service with
+  // no pod as an absorber is false, and the chain assertion below forbids it.
+  wallet: { into: 'agora', index: 3, port: 4103 },
+  trade: { into: 'agora', index: 14, port: 4114 },
+  'hub-api': { into: 'agora', index: 19, port: 4119 },
+  'admin-api': { into: 'agora', index: 20, port: 4120 },
+  emberkin: { into: 'agora', index: 22, port: 4122 },
 };
 
 test('an absorbed row keeps its port slot and its index', () => {
@@ -511,7 +521,7 @@ test('an absorbed row cannot reach a release manifest', () => {
         `the defect this change exists to end`,
     );
   }
-  assert.equal(releasable.size, 35, '52 deployables less the seventeen absorbed');
+  assert.equal(releasable.size, 30, '52 deployables less the twenty-two absorbed');
   assert.equal(deployableRepos().length, 52, 'and the port block is untouched');
 
   // Every releasable row still resolves to an image, so the filter removed the four and nothing
