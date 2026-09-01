@@ -119,6 +119,23 @@ composed system. AD-02 and AD-03 are the machinery that pays that cost, and
 
 > **If this machinery is not working, no repository may be split.**
 
+> **AD-01's "one repository per deployable" stopped being literally true in the merge waves, and
+> the registry is where that is stated.** `deployableRepos()` returns **52**, `releasableRepos()`
+> **30**, and the **22** rows between them are `absorbed(…)`: repositories whose code now runs as a
+> module of another process — every one of them inside `agora`, which is 23 modules.
+>
+> An absorbed row is deliberately still deployable and deliberately not releasable. It keeps its
+> Kubernetes `Service` resolving as an `ExternalName` alias to the absorber, so callers that address
+> it by service name are unaffected; and `cfctl bump` skips it, `publish-image.yml` refuses it, and
+> `cfctl release` writes no digest for it, so nothing builds an image nothing runs. That asymmetry
+> IS the mechanism — it is what let twenty-two services merge without a coordinated edit across
+> every caller.
+>
+> The estate is **17 application Deployments** as a result, from 72 running pods. What merged, what
+> was refused and why is
+> [`micro-deploy/docs/service-merge-plan.md`](https://github.com/cloudsforge-online/micro-deploy/blob/main/docs/service-merge-plan.md);
+> **M5f** is the final audit.
+
 ## What is in here
 
 | | |
