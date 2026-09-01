@@ -23,7 +23,7 @@ worse for P3, where several items are gated on a decision rather than on work.
 | band | items | days |
 |---|---|---|
 | P0 · live exposure | 7 | ~12 + 2 decisions |
-| P1 · controls that do not work | 13 | ~16 |
+| P1 · controls that do not work | 13 | ~15 |
 | P2 · cost paid repeatedly | 12 | ~15 |
 | P3 · capability and unfinished product | 23 | ~103 |
 
@@ -70,12 +70,19 @@ user's own exported phrase stops finding their addresses.
 ## P1 — Controls that do not work
 
 Safety nets that report success without doing their job, and correctness defects a user
-meets. These rank above capability because each makes the estate *look* healthier than
+meets. **#431 closed on 2026-09-01** — the Kubernetes migration was its own option 3,
+"the only one that removes the class of failure rather than the instance", and every link
+in the boot chain now starts without a human. Its replacement at the top of this band,
+[#533](https://github.com/cloudsforge-online/micro-org/issues/533), is the third control
+this week found reporting on a value while saying nothing about whether it measured at
+all — after the backup runner (#532) and the miner-key artefact. That is now a pattern
+worth naming: **every alert in this estate should be paired with one that fires on the
+absence of its own input.** These rank above capability because each makes the estate *look* healthier than
 it is — and two are GDPR obligations rather than preferences.
 
 | ref | class | item | est |
 |---|---|---|---|
-| [#431](https://github.com/cloudsforge-online/micro-org/issues/431) | non-func | The estate does not survive a reboot of the app host, and nothing inside it can tell us | 3d |
+| [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25, and no alert can see a sweep that *stopped* | 2d |
 | [#491](https://github.com/cloudsforge-online/micro-org/issues/491) | functional | micro-worlds has no erasure handler at all, and it stores user_id | 2d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | Shared identity delivers events to mainnet only — testnet never hears `identity.user.deleted` | 1.5d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
@@ -193,6 +200,14 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #431 closed with evidence (k3s `enabled`, cf-k8s
+  `AutomaticStartAction=Start`, chain-host daemons and snap docker `enabled`, uptime
+  workflow outside the blast radius, no micro-site test making a network call). #533 filed
+  in its place: testnet reconciliation has not run since 2026-08-25 because the merged
+  `ledger` takes a single `LEDGER_RECONCILE_NETWORK`, and the one reconciliation alert
+  fires on `drift != 0`, which a stopped sweep never produces. Two testnet assets are
+  frozen with nothing able to clear them. #512 confirmed open — `/internal` returns 502,
+  i.e. forwarded to an absent origin rather than refused.
 - **2026-09-01** — #532's engineering half shipped as micro-deploy#286:
   `BACKUP_MINER_EXPECTED_ADDRESS`, which refuses rather than writing, so the existing
   `MinerCoinbaseKeyUnbacked` alert becomes true instead of staying silent. Left
