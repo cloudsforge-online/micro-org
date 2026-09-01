@@ -86,12 +86,13 @@ it is — and two are GDPR obligations rather than preferences.
 | [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | **No erasure handler reaches more than one database** — 191 rows naming a person sit in seven testnet databases | 2d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
-| [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account | 1d |
+| [#537](https://github.com/cloudsforge-online/micro-org/issues/537) | non-func | **The conformance runner was left behind by the Kubernetes migration** — the corpus has not been replayed since 2026-08-18 and `ConformanceCorpusStale` has been firing throughout | 2d |
+| [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account — now a **requirement of #537** rather than a separate item; there is no runner to borrow it | — |
 | [#503](https://github.com/cloudsforge-online/micro-org/issues/503) | functional | Testnet EMBER frozen since 2026-08-15, constant reconciliation drift | 2d |
 | [#472](https://github.com/cloudsforge-online/micro-org/issues/472) | functional | The testnet identity issues tokens no testnet service will accept | 1d |
 | [#518](https://github.com/cloudsforge-online/micro-org/issues/518) | owner · functional | The testnet faucet has never been funded — 0 EMBER; the log spam is fixed, the float is a treasury call | — |
 | [#207](https://github.com/cloudsforge-online/micro-org/issues/207) | non-func | The backup disk exposes no SMART | 1d |
-| [#499](https://github.com/cloudsforge-online/micro-org/issues/499) | non-func | estate-ci: the ledger account-key resolver is one over budget | 1d |
+| [#499](https://github.com/cloudsforge-online/micro-org/issues/499) | non-func | estate-ci: the ledger account-key resolver is one over budget — **fixed**, and it was never a blind spot; see the changelog | done |
 
 ## P2 — Cost you pay repeatedly
 
@@ -197,6 +198,40 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #499 closed, and neither of the two numbers it failed on measured anything
+  real. It read **9 places against a budget of 8**, then **19** after the service merge, while
+  the estate did not get less readable either time. The ninth place was `wallet/src/money.ts`'s
+  exchange desk — a named constant and two plain string literals — reported as "purpose not
+  static" only because ledger migration 18 added `inventory` to `accounts_purpose_chk` and
+  conformance's hand-copied mirror of that constraint was never touched. `vocabularyDrift` now
+  reads both constraints out of the migrations and refuses on drift in either direction; the
+  **retired** direction is the one to fear, because a word left behind after the ledger drops it
+  would let the sweep bless a value the check constraint rejects. The other ten were one service
+  counted twice: the merge moved twenty services into `agora/src/<name>/` and deleted no
+  repository. And underneath both, the merge had **quietly weakened the resolver** — one resolver
+  per repository stopped being one per service the moment `agora` became sixteen of them, which
+  is the exact cross-service guess `repoResolver`'s docstring forbids. `BASELINE_UNRESOLVED`
+  stays 8 and the eight places are the same eight its header already described. (micro-conformance#8)
+- **2026-09-01** — the same merge fault had broken **three more estate-ci sections**, and running
+  the job rather than reading it is what found them. The **body scan** was green at its ratchet
+  of 38/32 on 18 August and read **178/172** today, because `agora` absorbed `wallet`, wallet has
+  a secret-bearing column, and sixteen services' 662 routes joined the key-material gate. Judging
+  the *service* rather than the repository it shares puts it back on 38/32 with the identical
+  split — 18 identity, 10 notify, 4 devplatform — which is the evidence nothing was lost.
+  **derive-grants** had six failures, five of them gap entries keyed on paths that no longer
+  matched a file; fixing it exposed the one that mattered, that `hub-api` and `admin-api` were
+  attributed to `agora` itself, **a grant widening dressed up as a derivation**. And **two
+  canaries** were planting injections into checkouts the checkers no longer read, so both
+  accused a checker of a fault that was in the canary; they now ask where the checker reads
+  rather than knowing. (micro-conformance#9, micro-deploy#291, micro-agora#10, micro-org#536)
+- **2026-09-01** — #537 filed, and it is why #443 stops being its own item. The conformance
+  runner exists only as a compose service and **was never translated into a Kubernetes
+  workload** — no Deployment, no CronJob, no Job in any namespace. `conformance_runs` stops on
+  2026-08-18, the day of the migration, and `ConformanceCorpusStale` has been firing on every
+  suite for fourteen days saying exactly the right thing: *"Find the runner, not the
+  divergence."* `HearthConformanceVectorsFailing` is firing beside it on an input that stopped a
+  fortnight ago. #443 reports that the runner borrows beacon's eighth journey account; there is
+  no runner to borrow it, so that shared-fate defect becomes a requirement of rebuilding it.
 - **2026-09-01** — #455 closed (micro-org#535). The check moved ahead of the write: an
   unresolved digest now refuses and names which entries, instead of emitting a file the org
   suite rejects two steps later after a PR has been merged. The escape hatch is kept —
