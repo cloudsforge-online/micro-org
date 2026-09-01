@@ -86,7 +86,9 @@ it is — and two are GDPR obligations rather than preferences.
 | [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | **No erasure handler reaches more than one database** — 191 rows naming a person sit in seven testnet databases | 2d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
-| [#539](https://github.com/cloudsforge-online/micro-org/issues/539) | non-func | **Eleven `BeaconTargetDown` alerts and not one surface is down** — the probes still name the subdomains the apex consolidation retired; the seeder that would fix it cannot run on the node, which is missing a sibling checkout it marks REQUIRED | 0.5d |
+| [#540](https://github.com/cloudsforge-online/micro-org/issues/541) | functional | **A GDPR erasure has been failing for everyone who owns a Homestead** — eight events retrying continuously since at least 2026-08; the person asked to be erased and was not being. **Fixed** (micro-agora#11) | done |
+| [#541](https://github.com/cloudsforge-online/micro-org/issues/541) | non-func | One failing route fires twenty-four SLO alerts — the merged pod labels one counter with twenty service names, so nineteen are false and a real per-module breach would be diluted twentyfold | 1.5d |
+| [#539](https://github.com/cloudsforge-online/micro-org/issues/539) | non-func | Eleven `BeaconTargetDown` alerts and not one surface is down — **closed 2026-09-02**, and the cause was three REQUIRED sibling checkouts missing from the node | done |
 | [#538](https://github.com/cloudsforge-online/micro-org/issues/538) | functional | The conformance corpus records Ninety Days After as a draft, and it went live — a reviewed re-record, not a code change | 0.5d |
 | [#537](https://github.com/cloudsforge-online/micro-org/issues/537) | non-func | The conformance runner was left behind by the Kubernetes migration — **closed 2026-09-01**, corpus replaying and `ConformanceCorpusStale` clear on every suite | done |
 | [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account — now a **requirement of #537** rather than a separate item; there is no runner to borrow it | — |
@@ -200,6 +202,37 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-02** — **#539 closed, and the cause was a layer below the probes.** The eleven alerts
+  were stale probe rows, but the reason they were stale is that the seeder that writes them
+  *cannot run on the node*: `contracts`, `ui` and `agora` — three checkouts
+  `provision-siblings.sh` marks **REQUIRED** — were missing from the k3s VM, and there was no Node
+  binary either. `estate-bootstrap.sh` has checked the siblings since micro-org#350, but the k8s
+  estate is not brought up with `estate-bootstrap.sh`, so on the cluster node **nothing had ever
+  checked them**. Provisioned; `node-tool.sh` fetched its pinned tarball first time; the seeder
+  repointed all eleven at the apex mounts and gave `agora`, `exchange` and `journal` a probe they
+  had never had. `estate-verify.sh` now runs the check itself, as a failure and not a note
+  (micro-deploy#296) — both halves of that are this estate's own history.
+- **2026-09-02** — **the twenty-four SLO alerts were one failing route, and the route was a GDPR
+  erasure.** Chasing them found `POST /v1/events/tessera` 500ing continuously — 2,962 of the last
+  4,000 lines of agora's log — on a Postgres refusal: *"parcel … is a Homestead — it is not
+  tradeable"*. `eraseUser` repoints every retained row onto an `erased:` placeholder, and
+  `tessera_guard_homestead` refuses **any** change of a Homestead's owner. The handler does not
+  catch it, so no inbox row is written and the relay redelivers for ever. **A Homestead is the free
+  starter parcel**, so this is the erasure failing for approximately everybody. Migration 16 admits
+  exactly one transition, one-way. The fixtures never held a Homestead — and the author of that
+  file had anticipated the *other* trigger on the same UPDATE and defeated it deliberately, which
+  is the sharpest possible statement of why the common row belongs in a fixture. (micro-agora#11)
+- **2026-09-02** — #541 filed: **nineteen of those twenty-four alerts named services that had done
+  nothing.** Every module in the merged pod labels one shared `http_requests_total` with its own
+  service name, so twenty services report the same 2.84 req/s to five decimal places and one
+  route's 500s appear under ten of them. Three of the false ones page. The inverse is worse than
+  the noise: a module that really is failing is diluted twentyfold by nineteen that are fine.
+- **2026-09-02** — and the last firing family was the **inverse** of everything above:
+  `BackupNeverRun` on a testnet runner that does not exist, about databases that *are* backed up —
+  54 dumps in the 2026-09-01 set, 22 of them `*_testnet`, because the two Postgres clusters became
+  one. An alert that says a control is missing when it is present teaches the same lesson as a
+  false green. Removed with its scrape job (micro-deploy#297). **Mainnet's firing-alert count went
+  from 40 to 1 today**, and the one that remains is true: micro-org#538.
 - **2026-09-01** — #537 closed, and the estate has a conformance gate with an input again. The
   runner shipped as an image (micro-conformance#10) and a **CronJob** (micro-deploy#292) — not a
   translation of the Deployment, because a container that sleeps for a day is a container whose
