@@ -19,6 +19,7 @@ import {
   portFor,
   publishesAnArtifact,
   readGithubReleases,
+  releaseRefusal,
   renderManifest,
   rewriteVersionText,
   satisfies,
@@ -1256,3 +1257,47 @@ test('the release is named by an annotated tag, referred to by its full ref', ()
   // refusal rather than a `--force`. Moving it would make the release name mutable again.
   assert.ok(!bump.includes("'-f'") && !bump.includes("'--force'"));
 });
+
+/*
+ * micro-org#455. `cfctl release` wrote the manifest and THEN warned about missing digests. Cutting
+ * 2026.08.31 while 38 images were still building produced 38 empty `digest:` fields, reported
+ * success, and failed the org suite two steps later after a PR had been opened and merged.
+ *
+ * Every guard in the chain worked. The last one did — which is the most expensive place to find it.
+ */
+test('cfctl release refuses to write a manifest whose digests could not be resolved', () => {
+  const refusal = releaseRefusal({
+    unresolved: ['micro-identity: GHCR served no digest for :2.5.7', 'micro-ledger: no digest'],
+    total: 40,
+    version: '2026.08.31',
+    allowed: false,
+    path: 'releases/2026.08.31.yaml',
+  })
+
+  assert.notEqual(refusal, null)
+  // It says WHICH ones, because "some digests are missing" sends whoever reads it to diff a
+  // 40-entry file against a registry to find out which.
+  assert.match(refusal ?? '', /micro-identity/)
+  assert.match(refusal ?? '', /micro-ledger/)
+  // And it says the file was not written, so nobody goes looking for it.
+  assert.match(refusal ?? '', /was NOT written/)
+  // And how to proceed deliberately, since the escape hatch is the whole reason this is a default
+  // rather than a prohibition.
+  assert.match(refusal ?? '', /--allow-missing-digests/)
+})
+
+test('cfctl release writes when every digest resolved, or when the operator asked for tag-only', () => {
+  // The ordinary case: nothing unresolved, nothing to refuse.
+  assert.equal(
+    releaseRefusal({ unresolved: [], total: 40, version: 'v', allowed: false, path: 'p' }),
+    null,
+  )
+
+  // THE ESCAPE HATCH IS LOAD-BEARING and must keep working. GHCR publishes minutes after the push,
+  // so a manifest cut in that window has tags resolving to nothing yet; a tool that refused
+  // outright would be unusable in exactly the window it is used in.
+  assert.equal(
+    releaseRefusal({ unresolved: ['micro-identity: no digest'], total: 40, version: 'v', allowed: true, path: 'p' }),
+    null,
+  )
+})

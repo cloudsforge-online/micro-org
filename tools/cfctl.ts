@@ -1893,6 +1893,44 @@ function cmdBump(args: Args): number {
   return 0;
 }
 
+/**
+ * Why `cfctl release` must not write this manifest, or `null` if it may (micro-org#455).
+ *
+ * A FUNCTION rather than a branch inside `cmdRelease`, so the decision can be exercised without a
+ * checkout fixture and a live GHCR. The bug this closes is not subtle logic; it is that the check
+ * ran after the write, so the only way it could fail was as somebody else's problem.
+ *
+ * ── WHAT WENT WRONG ─────────────────────────────────────────────────────────────────────────
+ *
+ * Cutting 2026.08.31 while 38 images were still building produced a manifest with 38 empty
+ * `digest:` fields. `cfctl release` reported success, a PR was opened and merged, and the org
+ * suite failed on it two steps later; the manifest had to be deleted and re-cut. Every guard in
+ * the chain worked — the last one did, which is the most expensive place to find it.
+ *
+ * ── WHY THERE IS STILL AN ESCAPE HATCH ──────────────────────────────────────────────────────
+ *
+ * GHCR publishes minutes after the push, so a manifest cut in that window has tags that resolve to
+ * nothing yet, and a tool that refused outright would be unusable in exactly the window it is used
+ * in. What changes is the DEFAULT: writing a tag-only manifest is now something asked for by name
+ * rather than something that happens to you.
+ */
+export function releaseRefusal(input: {
+  readonly unresolved: readonly string[];
+  readonly total: number;
+  readonly version: string;
+  readonly allowed: boolean;
+  readonly path: string;
+}): string | null {
+  if (input.unresolved.length === 0 || input.allowed) return null;
+  return (
+    `::error::${input.unresolved.length} of ${input.total} entries have NO digest, so ${input.path} was NOT written:\n` +
+    input.unresolved.map((line) => `  ${line}\n`).join('') +
+    '\nA tag is a name this estate moves (micro-org#288), so these entries would not name a fixed\n' +
+    'artifact. Images publish minutes after the push — wait and re-run, or, if a tag-only\n' +
+    `manifest is genuinely what you want:  cfctl release ${input.version} --allow-missing-digests\n`
+  );
+}
+
 function cmdRelease(args: Args): number {
   const version = args.option('verify') ?? args.positional[1];
   if (!version) {
@@ -1967,6 +2005,18 @@ function cmdRelease(args: Args): number {
     return 1;
   }
 
+  const refusal = releaseRefusal({
+    unresolved,
+    total: services.length,
+    version,
+    allowed: args.flag('allow-missing-digests'),
+    path: path.relative(process.cwd(), file),
+  });
+  if (refusal !== null) {
+    process.stderr.write(refusal);
+    return 1;
+  }
+
   mkdirSync(releasesDir(), { recursive: true });
   const rendered = renderManifest({
     version,
@@ -1996,6 +2046,9 @@ function cmdRelease(args: Args): number {
   // push, so a manifest cut in the minutes before its builds finish has tags that resolve to
   // nothing yet — refusing would make the tool unusable in exactly the window it is used in. What
   // it must not do is stay quiet: a tag-only entry is the state this whole change exists to end.
+  // Reachable only with --allow-missing-digests, since the refusal above is the default path.
+  // Still printed rather than assumed: somebody passed the flag, and the file they now have is one
+  // a later `--verify` will report as unverifiable.
   if (unresolved.length > 0) {
     process.stdout.write(
       `\n::warning::${unresolved.length} of ${services.length} entries have NO digest and are pinned by tag alone:\n`,
@@ -2643,7 +2696,7 @@ const USAGE = `cfctl — CloudsForge organisation machinery (AD-03)
   cfctl doctor [--online] [--strict]
   cfctl cross [--list] [--json] [--unclassified] [--repo <name>]
   cfctl bump <version> [--only a,b] [--notes <file>] [--any-branch] [--push]
-  cfctl release <version> [--force]
+  cfctl release <version> [--force] [--allow-missing-digests]
   cfctl release --verify <version>
   cfctl clients [--verify]
   cfctl new service <name>
