@@ -23,7 +23,7 @@ worse for P3, where several items are gated on a decision rather than on work.
 | band | items | days |
 |---|---|---|
 | P0 · live exposure | 7 | ~12 + 2 decisions |
-| P1 · controls that do not work | 11 | ~15 |
+| P1 · controls that do not work | 10 | ~14.5 |
 | P2 · cost paid repeatedly | 12 | ~15 |
 | P3 · capability and unfinished product | 23 | ~103 |
 
@@ -91,7 +91,6 @@ it is — and two are GDPR obligations rather than preferences.
 | [#472](https://github.com/cloudsforge-online/micro-org/issues/472) | functional | The testnet identity issues tokens no testnet service will accept | 1d |
 | [#518](https://github.com/cloudsforge-online/micro-org/issues/518) | owner · functional | The testnet faucet has never been funded — 0 EMBER; the log spam is fixed, the float is a treasury call | — |
 | [#207](https://github.com/cloudsforge-online/micro-org/issues/207) | non-func | The backup disk exposes no SMART | 1d |
-| [#455](https://github.com/cloudsforge-online/micro-org/issues/455) | non-func | `cfctl release` writes a manifest with empty digests instead of refusing | 0.5d |
 | [#499](https://github.com/cloudsforge-online/micro-org/issues/499) | non-func | estate-ci: the ledger account-key resolver is one over budget | 1d |
 
 ## P2 — Cost you pay repeatedly
@@ -198,6 +197,13 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #455 closed (micro-org#535). The check moved ahead of the write: an
+  unresolved digest now refuses and names which entries, instead of emitting a file the org
+  suite rejects two steps later after a PR has been merged. The escape hatch is kept —
+  `--allow-missing-digests` — because the existing argument for it is right: GHCR publishes
+  minutes after the push. What changed is the default. The bug was never logic, it was
+  **ordering**: the check ran after the write, so the only way it could fail was as somebody
+  else's problem.
 - **2026-09-01** — #474 re-measured, and the consolidation changed its shape rather than
   fixing it. The mechanism it describes — subscription URLs resolving only inside the mainnet
   compose network — is gone. What replaced it is the same defect one layer down: **not one
