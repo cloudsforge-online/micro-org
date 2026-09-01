@@ -82,7 +82,7 @@ it is — and two are GDPR obligations rather than preferences.
 
 | ref | class | item | est |
 |---|---|---|---|
-| [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25, and no alert can see a sweep that *stopped* | 2d |
+| [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25 — ledger + alert **shipped**; the indexer half remains | 1d |
 | [#491](https://github.com/cloudsforge-online/micro-org/issues/491) | functional | micro-worlds has no erasure handler at all, and it stores user_id | 2d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | Shared identity delivers events to mainnet only — testnet never hears `identity.user.deleted` | 1.5d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
@@ -200,6 +200,15 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #533's ledger and alerting halves shipped (micro-ledger#27,
+  micro-deploy#287): `LEDGER_RECONCILE_NETWORK` is a list, the job key carries the network,
+  the handler resolves its database from the payload and refuses a network it has no DSN
+  for, every series gains a `network` label, and `LedgerReconciliationStale` fires on
+  `time() - last_run > 3600`. **Correction to my own filing:** I wrote it up as though the
+  ledger were the whole fix. The indexer stopped following testnet on the same day and has
+  no `INDEXER_CHAINS` at all, so enabling the sweep first would freeze every testnet asset
+  for want of an observation — the exact row already in `ledger_testnet`. The manifest is
+  deliberately untouched; the indexer goes first.
 - **2026-09-01** — #431 closed with evidence (k3s `enabled`, cf-k8s
   `AutomaticStartAction=Start`, chain-host daemons and snap docker `enabled`, uptime
   workflow outside the blast radius, no micro-site test making a network call). #533 filed
