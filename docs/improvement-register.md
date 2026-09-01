@@ -22,7 +22,7 @@ worse for P3, where several items are gated on a decision rather than on work.
 
 | band | items | days |
 |---|---|---|
-| P0 · live exposure | 9 | ~14 + 2 decisions |
+| P0 · live exposure | 6 | ~10 + 2 decisions |
 | P1 · controls that do not work | 13 | ~16 |
 | P2 · cost paid repeatedly | 12 | ~15 |
 | P3 · capability and unfinished product | 23 | ~103 |
@@ -35,6 +35,17 @@ Secrets that are out, keys concentrated where one compromise takes the money, an
 legal question that decides whether the custody product may exist at all. Every one is
 worse tomorrow than today, and two are not engineering.
 
+**Three of the nine closed on 2026-09-01 without a line of the work they asked for** —
+#423, #510 and #508. All three described a pre-consolidation estate, and the
+consolidation either removed their premise or resolved them by a better route than the
+one they proposed. What came out of working them is one real defect they were all
+standing next to, now fixed in
+[micro-custody#21](https://github.com/cloudsforge-online/micro-custody/pull/21): the
+address index counter was per SEED, while a seed derives under as many BIP-44 paths as
+it serves chains and networks, so the indexes interleaved and left every path with
+holes. Twenty consecutive holes is the gap limit at which a wallet restoring from the
+user's own exported phrase stops finding their addresses.
+
 | ref | class | item | est | status |
 |---|---|---|---|---|
 | [#25](https://github.com/cloudsforge-online/micro-org/issues/25) | non-func | The custody keyring has no automated off-host copy — losing the host loses every custodied key | 2d | **items 1–2 closed 2026-09-01, item 3 open** |
@@ -43,9 +54,6 @@ worse tomorrow than today, and two are not engineering.
 | [#473](https://github.com/cloudsforge-online/micro-org/issues/473) | non-func | The mainnet multisig's three keys all live on the chain host | 3d | open |
 | [#206](https://github.com/cloudsforge-online/micro-org/issues/206) | non-func | Miner coinbase keys plaintext on disk, controlling 9,332 EMBER | 2d | open |
 | #210 (task) | non-func | Rotate the mainnet outbox and ingest secrets | 2d | open |
-| [#423](https://github.com/cloudsforge-online/micro-org/issues/423) | non-func | 227 testnet custody keys and 224 wallet rows in the mainnet databases | 2d | open |
-| [#510](https://github.com/cloudsforge-online/micro-org/issues/510) | functional | `custody_seeds` unique on (user_id, family) without network | 1.5d | open |
-| [#508](https://github.com/cloudsforge-online/micro-org/issues/508) | non-func | The testnet custody keyring was never rotated with the estate's | 1.5d | open |
 
 ## P1 — Controls that do not work
 
@@ -119,9 +127,9 @@ way.
 
 1. **The two owner-only P0 items**, because they cost minutes and are accruing: revoke
    the Azure key (#209), and start the counsel conversation on #161.
-2. **The key-concentration block** — #473, #206, #423, #510, #508 — as one piece, since
-   they share context and a single deploy. This moved ahead of #25; see the correction
-   below.
+2. **The key-concentration block** — now **#473 and #206** alone, the other three having
+   closed on 2026-09-01. Both are about where a key physically lives rather than about
+   the database, so they no longer share a deploy with anything and can go independently.
 3. **#25 item 3**, which is now an availability problem rather than a confidentiality
    one, and needs a design decision about *where* the keyring copy lives before any
    code is written.
@@ -149,11 +157,32 @@ because it is the only single point of unrecoverable loss in the estate, but it 
 urgent in the way "a secret is public" is urgent, and nothing external is ticking.
 
 The lesson for the rest of this register: an issue's own title is evidence of what was
-true when it was filed, not of what is true now. #504 was the same shape.
+true when it was filed, not of what is true now. #504 was the same shape, and so were
+all three of #423, #510 and #508 — which is now four out of the first five items worked.
+
+**That is a pattern, not a run of luck, and it changes how the rest of this should be
+read.** Every one of those issues was filed against an estate with two of everything.
+The consolidation did not just close them; in two cases it inverted them. #423 asks for
+a decision about testnet rows "in the mainnet estate's databases" and proposes deleting
+them — there is one estate now, those rows are the live testnet data, and deleting them
+would have destroyed it. #510 proposes splitting the custody seed per network, which
+would give every user two mnemonics per family and still not fix the thing that was
+actually broken.
+
+So the rule I am applying to the remaining items: **measure the estate before believing
+the ticket**, and treat a proposed remedy as the most perishable part of any issue. The
+defect described may survive a re-architecture; the fix almost never does.
 
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #423, #510 and #508 closed with evidence, none needing the work they
+  asked for; the key-concentration block is now #473 and #206 alone. The defect found
+  underneath them — one address-index counter shared across a seed's several derivation
+  paths — is fixed in micro-custody#21, with a regression test that mints interleaved
+  across BTC/LTC/DOGE and asserts each path stays contiguous. Two existing tests changed
+  with it: both had pinned an index that only held because the shared counter produced
+  it, and both now demonstrate the coin-type separation they were written for.
 - **2026-09-01** — #25 items 1 and 2 closed. Item 2 shipped
   (`runbooks/runbook-custody-master-secret.md`, cited by five documents and never
   written); item 1 found already closed by the 2026-08-13 disclosure. Item 3 re-framed
