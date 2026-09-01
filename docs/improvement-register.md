@@ -37,7 +37,7 @@ worse tomorrow than today, and two are not engineering.
 
 | ref | class | item | est | status |
 |---|---|---|---|---|
-| [#25](https://github.com/cloudsforge-online/micro-org/issues/25) | non-func | The custody master secret is readable in public git history | 3d | **in progress** |
+| [#25](https://github.com/cloudsforge-online/micro-org/issues/25) | non-func | The custody keyring has no automated off-host copy — losing the host loses every custodied key | 2d | **items 1–2 closed 2026-09-01, item 3 open** |
 | [#161](https://github.com/cloudsforge-online/micro-org/issues/161) | owner · non-func | Whether the platform may lawfully custody third-party crypto-assets at all | — | open |
 | #209 (task) | owner · non-func | Revoke the exposed Azure Foundry key | 0.5d | open |
 | [#473](https://github.com/cloudsforge-online/micro-org/issues/473) | non-func | The mainnet multisig's three keys all live on the chain host | 3d | open |
@@ -119,15 +119,42 @@ way.
 
 1. **The two owner-only P0 items**, because they cost minutes and are accruing: revoke
    the Azure key (#209), and start the counsel conversation on #161.
-2. **#25**, because the public secret is the only item here a stranger can act on today.
-3. **The key-concentration block** — #473, #206, #423, #510, #508 — as one piece, since
-   they share context and a single deploy.
+2. **The key-concentration block** — #473, #206, #423, #510, #508 — as one piece, since
+   they share context and a single deploy. This moved ahead of #25; see the correction
+   below.
+3. **#25 item 3**, which is now an availability problem rather than a confidentiality
+   one, and needs a design decision about *where* the keyring copy lives before any
+   code is written.
 4. **P1, starting with #431.** Everything else in that band assumes the estate comes back
    after a reboot, and nothing has proven it does.
 
 The consolidation is deliberately absent: it closed cleanly, and what it left behind is
 three P2 maintainability items rather than a tail of defects.
 
+## Corrections to this register
+
+**#25 was mis-ranked when this was compiled, and the correction matters more than the
+item.** I banded it top of P0 as "the only item a stranger can act on today". Working it
+turned up `micro-deploy docs/DISCLOSURE-custody-master-secret-v1.md`, written 2026-08-13,
+which had already decided item 1 — and which records that the disclosed value is
+`estate-only-custody-master-secret-v1-0000`, a **zero-entropy placeholder, not a key**.
+It would fail `assertMasterSecret` today. Confirmed live: 325 custody keys and 254 seeds,
+all at `key_version 4`, and the keyring holds V4 alone.
+
+So there is no readable secret in public history — there is a public *placeholder*. The
+real remaining risk is item 3, and it is the opposite kind: the vault is backed up and
+the key that decrypts it is not, which the backup manifest states as
+`custodyKeyringIncluded: false`. **Availability, not confidentiality.** It stays in P0
+because it is the only single point of unrecoverable loss in the estate, but it is not
+urgent in the way "a secret is public" is urgent, and nothing external is ticking.
+
+The lesson for the rest of this register: an issue's own title is evidence of what was
+true when it was filed, not of what is true now. #504 was the same shape.
+
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #25 items 1 and 2 closed. Item 2 shipped
+  (`runbooks/runbook-custody-master-secret.md`, cited by five documents and never
+  written); item 1 found already closed by the 2026-08-13 disclosure. Item 3 re-framed
+  and re-estimated 3d → 2d. Band order updated.
