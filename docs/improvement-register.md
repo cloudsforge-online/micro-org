@@ -86,7 +86,9 @@ it is — and two are GDPR obligations rather than preferences.
 | [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | **No erasure handler reaches more than one database** — 191 rows naming a person sit in seven testnet databases | 2d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
-| [#537](https://github.com/cloudsforge-online/micro-org/issues/537) | non-func | **The conformance runner was left behind by the Kubernetes migration** — the corpus has not been replayed since 2026-08-18 and `ConformanceCorpusStale` has been firing throughout | 2d |
+| [#539](https://github.com/cloudsforge-online/micro-org/issues/539) | non-func | **Eleven `BeaconTargetDown` alerts and not one surface is down** — the probes still name the subdomains the apex consolidation retired; the seeder that would fix it cannot run on the node, which is missing a sibling checkout it marks REQUIRED | 0.5d |
+| [#538](https://github.com/cloudsforge-online/micro-org/issues/538) | functional | The conformance corpus records Ninety Days After as a draft, and it went live — a reviewed re-record, not a code change | 0.5d |
+| [#537](https://github.com/cloudsforge-online/micro-org/issues/537) | non-func | The conformance runner was left behind by the Kubernetes migration — **closed 2026-09-01**, corpus replaying and `ConformanceCorpusStale` clear on every suite | done |
 | [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account — now a **requirement of #537** rather than a separate item; there is no runner to borrow it | — |
 | [#503](https://github.com/cloudsforge-online/micro-org/issues/503) | functional | Testnet EMBER frozen since 2026-08-15, constant reconciliation drift | 2d |
 | [#472](https://github.com/cloudsforge-online/micro-org/issues/472) | functional | The testnet identity issues tokens no testnet service will accept | 1d |
@@ -198,6 +200,28 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #537 closed, and the estate has a conformance gate with an input again. The
+  runner shipped as an image (micro-conformance#10) and a **CronJob** (micro-deploy#292) — not a
+  translation of the Deployment, because a container that sleeps for a day is a container whose
+  failure to wake up nothing notices. First real pass: **8/8 suites published**,
+  `ConformanceCorpusStale` from 8 firing to **zero**, and `HearthConformanceVectorsFailing` from
+  two (20 vectors in `chain`, 12 in `health`) to one — because those thirty-two were a fortnight-old
+  measurement, and `chain` and `health` now pass. **Each of the first three runs found a fault, and
+  each failed by blaming something else:** the apply script's image check used `docker manifest
+  inspect` on a node with no docker; a Secret volume gave the pod a directory it could list and
+  files it could not open, reported as a MISSING secret rather than a permissions one; and I left
+  out the trust bundle on an argument the harness refused — *"every scenario would skip on a
+  handshake failure that reads like a dead estate"* — which is right, and weakening that check to
+  fit the deployment would have been the move these checks exist to prevent. Five orphaned suite
+  rows withdrawn with README §2c's own predicate (`DELETE 5`); one real difference left, #538.
+- **2026-09-01** — #539 filed while verifying the above, and it is the third thing this week that
+  was firing correctly at nobody. Eleven `BeaconTargetDown` alerts on mainnet, and **not one of the
+  eleven surfaces is down** — they 301 to the apex mounts and answer 200 there. The probe is right
+  to call a 301 down (`redirect: 'manual'`, deliberately); the probe ROW is stale. The surface
+  registry already records all eleven as apex mounts and the seeder derives every URL from it, so
+  the fix is `estate-seed.mjs --only beacon` — except **the node cannot run it**: `~/dev/cloudsforge`
+  holds deploy, org, runtime and miner-keys, and `provision-siblings.sh` marks `ui` REQUIRED for
+  exactly this seeder. That half is the durable one.
 - **2026-09-01** — #499 closed, and neither of the two numbers it failed on measured anything
   real. It read **9 places against a budget of 8**, then **19** after the service merge, while
   the estate did not get less readable either time. The ninth place was `wallet/src/money.ts`'s
