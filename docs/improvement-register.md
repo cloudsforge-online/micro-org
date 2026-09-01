@@ -23,7 +23,7 @@ worse for P3, where several items are gated on a decision rather than on work.
 | band | items | days |
 |---|---|---|
 | P0 · live exposure | 7 | ~12 + 2 decisions |
-| P1 · controls that do not work | 11 | ~13 |
+| P1 · controls that do not work | 11 | ~15 |
 | P2 · cost paid repeatedly | 12 | ~15 |
 | P3 · capability and unfinished product | 23 | ~103 |
 
@@ -83,7 +83,7 @@ it is — and two are GDPR obligations rather than preferences.
 | ref | class | item | est |
 |---|---|---|---|
 | [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25 — ledger + alert **shipped**; the indexer half remains | 1d |
-| [#491](https://github.com/cloudsforge-online/micro-org/issues/491) | functional | micro-worlds has no erasure handler at all, and it stores user_id | 2d |
+| [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | Shared identity delivers events to mainnet only — testnet never hears `identity.user.deleted` | 1.5d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
 | [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account | 1d |
@@ -198,6 +198,15 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #491 closed (micro-worlds#20, micro-deploy#289): an erasure handler with a
+  table-by-table matrix and the lawful basis for each retained row, plus the register row
+  without which it would have been correct and unreachable — identity had ten subscriptions
+  and worlds was not one. **The catalogue sweep found a real leak on its first run**:
+  `rewardIdempotencyKey` embeds the user id verbatim in `reward_grants.idempotency_key`, two
+  columns to the right of the one I had anonymised, where a per-table assertion would have
+  passed. Replaced in the band by #534 — `check-erasure-register.py` was already failing for
+  **seven** services, not one; six remain, and five of those are financial, where retention is
+  probably right and the decision needs writing down rather than coding quickly.
 - **2026-09-01** — #515 closed: no scratch database exists among the 53 on the cluster, and
   the runner has run daily since, so a leak would be visible. Largest is `indexer` at 17 GB,
   which is legitimate. #518 re-classified **owner**: nothing is broken — the faucet holds
