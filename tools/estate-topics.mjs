@@ -199,6 +199,89 @@ function collect(dir, out = []) {
   return out
 }
 
+/**
+ * Where each service's source really is, after the M5 merge waves.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **ONE SERVICE'S SOURCE NOW EXISTS IN TWO CHECKOUTS, AND THIS FILE SAW TWO SERVICES.**
+ *
+ * `agora/src/community/` and `community/src/` are the same code: a merge wave copied it in, and
+ * the standalone repository is still checked out because it is still a repository. To this file
+ * that was one service emitting a topic and ANOTHER service holding a consumer rule for it, and
+ * its direction-3 verdict for that shape is "the two agree by luck rather than by contract".
+ * Eight community topics and `tessera.object.anchored` twice — ten disagreements, none of them
+ * real, every one a repository counted twice.
+ *
+ * A false disagreement is worse than none: it is the noise a true one hides in, and this file's
+ * whole argument is that a verdict is only worth reading if the set behind it is complete.
+ *
+ * ── AND WHY THE FIX IS A REMAP RATHER THAN A SKIP ─────────────────────────────────────────────
+ *
+ * Dropping the absorbed checkouts was the first attempt and it is WRONG, loudly: the registry
+ * names producers by their original service name (`producer: 'market'`), so removing `market/`
+ * left eleven of sixteen producers with no source at all — which the MIN_PRODUCERS_WITH_SOURCE
+ * guard caught immediately, exactly as it was written to. A partial checkout says "nobody emits
+ * it" about everything it is missing.
+ *
+ * So the mapping is: the absorbed service KEEPS its name, and its source is read from the
+ * absorber's module directory. `market` is `agora/src/market/`; the nested ones are one level
+ * deeper, `nda` at `agora/src/emberkin/nda/`. The absorber reads its own `src/` MINUS every
+ * module subtree, so nothing is counted twice in either direction.
+ *
+ * `absorbed()` rows in the registry are the source of truth — `deployableRepos()` keeps them and
+ * `releasableRepos()` drops them, so this is already stated once and there is no second list here.
+ * Parsed rather than imported because this is a script with no build step.
+ *
+ * If the parse finds nothing, every checkout is read as before. A checker that quietly stopped
+ * reading half the estate would report no disagreements and pass.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+const ABSORPTION = (() => {
+  const file = join(estate, 'org/tools/registry.ts')
+  const out = new Map()
+  const unmapped = []
+  if (!existsSync(file)) return out
+  const text = readFileSync(file, 'utf8')
+  for (const m of text.matchAll(/\babsorbed\(\s*'([a-z0-9-]+)'\s*,\s*'[^']*'\s*,\s*'([a-z0-9-]+)'/g)) {
+    const [, name, absorber] = m
+    // One level, then two: `agora/src/market` and `agora/src/emberkin/nda`. Measured rather than
+    // assumed — a module that moves deeper is a directory this finds, not a rule to re-derive.
+    const direct = join(estate, absorber, 'src', name)
+    if (existsSync(direct)) {
+      out.set(name, { absorber, dir: direct })
+      continue
+    }
+    let found = null
+    try {
+      for (const mid of readdirSync(join(estate, absorber, 'src'))) {
+        const nested = join(estate, absorber, 'src', mid, name)
+        if (existsSync(nested) && statSync(nested).isDirectory()) { found = nested; break }
+      }
+    } catch {
+      /* the absorber is not checked out; the standalone copy below is then the only source */
+    }
+    // `hub-api` is `agora/src/hub`, `admin-api` is `agora/src/admin`: the registry name carries a
+    // suffix the module directory does not. Tried LAST and only after both exact lookups fail, so
+    // a real directory always wins over a guess.
+    if (!found && name.endsWith('-api')) {
+      const stem = name.slice(0, -'-api'.length)
+      const trimmed = join(estate, absorber, 'src', stem)
+      if (existsSync(trimmed)) found = trimmed
+    }
+    if (found) out.set(name, { absorber, dir: found })
+    else unmapped.push(`${name} -> ${absorber}`)
+  }
+  if (unmapped.length > 0) {
+    // NOT silent. An absorbed row whose module directory cannot be found is a service read from
+    // BOTH its own checkout and its absorber's — the double count this block removes — and it
+    // would come back as a disagreement that reads like a real one.
+    console.log(
+      `  absorbed  ${unmapped.length} row(s) name no module directory under their absorber and are read from their own checkout: ${unmapped.join(', ')}`,
+    )
+  }
+  return out
+})()
+
 const repos = readdirSync(estate).filter((d) => {
   try {
     return statSync(join(estate, d)).isDirectory()
@@ -206,16 +289,36 @@ const repos = readdirSync(estate).filter((d) => {
     return false
   }
 })
+if (ABSORPTION.size > 0) {
+  console.log(
+    `  absorbed  ${ABSORPTION.size} service(s) read from their absorber's module directory rather than their own checkout: ${[...ABSORPTION.keys()].sort().join(' ')}`,
+  )
+}
 
 /** repo -> [{ path, text }], comments already stripped. Only repositories with a src/. */
 const sources = new Map()
+/** Every absorbed module's directory, so an absorber can exclude them from its own scan. */
+const MODULE_DIRS = [...ABSORPTION.values()].map((v) => v.dir)
 for (const repo of repos) {
-  const src = join(estate, repo, 'src')
+  const moved = ABSORPTION.get(repo)
+  // An absorbed service reads from its module directory and keeps its own NAME, because that is
+  // what the registry's `producer:` says and what every consumer rule refers to.
+  const src = moved ? moved.dir : join(estate, repo, 'src')
   if (!existsSync(src)) continue
+  // The reported path is the ORIGINAL layout — `tessera/src/kiln.ts`, not
+  // `tessera/src/tessera/kiln.ts`. Everything downstream keys on it: the deferral records in
+  // `estate-topic-gaps.json`, every message a person reads, and the cross-references in the issues
+  // this file opens. A module's move is a fact about the deployment, not about the file's name.
+  const base = moved ? moved.dir : join(estate, repo, 'src')
+  const isAbsorber = !moved && MODULE_DIRS.some((d) => d.startsWith(join(estate, repo) + '/'))
   sources.set(
     repo,
-    collect(src).map((path) => ({
-      path: `${repo}/${path.slice(join(estate, repo).length + 1)}`,
+    collect(src)
+      // The absorber's own scan stops at its modules' edges: they are read under their own names
+      // above, and reading them twice is the double-count this whole block exists to remove.
+      .filter((path) => !(isAbsorber && MODULE_DIRS.some((d) => path.startsWith(d + '/'))))
+      .map((path) => ({
+      path: `${repo}/src/${path.slice(base.length + 1)}`,
       ...stripComments(readFileSync(path, 'utf8')),
     })),
   )
@@ -382,20 +485,98 @@ function unwrapSubstitution(expr) {
   return null
 }
 
+/**
+ * `cond ? A : B` split at the TOP-LEVEL `?` and its matching `:`, or null.
+ *
+ * ── WHY A TOPIC EXPRESSION IS EVER A TERNARY ──────────────────────────────────────────────────
+ *
+ * `agora/src/posts.ts` writes one row for a spark and one for an echo through a single helper, and
+ * chooses the topic at the call: `topic: table === 'sparks' ? 'agora.spark.created' : '…echo…'`.
+ * Both names are registered and both are genuinely put on the bus. This checker read the whole
+ * expression, failed to resolve it, and then said of BOTH topics "registered, and no `topic:` in
+ * agora/src ever names it — the repair is an emit, not a rename". Three disagreements, all false,
+ * and a false disagreement is worse than none: it is the noise a real one hides in.
+ *
+ * ── AND WHY IT IS SPLIT RATHER THAN PATTERN-MATCHED ───────────────────────────────────────────
+ *
+ * The condition can contain both characters this needs to find. `a?.b` and `a ?? b` are not the
+ * ternary's `?`; a nested ternary and an object literal both put `:` in the way. So the scan is
+ * depth-aware over `()[]{}`, skips strings and template substitutions, and refuses `?.`/`??`.
+ *
+ * BOTH ARMS MUST RESOLVE or the whole expression stays unresolved. That is the file's existing
+ * discipline — "fail, do not guess" — and it matters more here than anywhere: half a ternary is a
+ * set that LOOKS complete, which is the one thing every verdict below depends on not being.
+ */
+function splitTernary(expr) {
+  let depth = 0
+  let quote = null
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i]
+    if (quote) {
+      if (c === '\\') i++
+      else if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
+    if (c === '(' || c === '[' || c === '{') { depth++; continue }
+    if (c === ')' || c === ']' || c === '}') { depth--; continue }
+    if (depth !== 0 || c !== '?') continue
+    if (expr[i + 1] === '.' || expr[i + 1] === '?') { i++; continue } // `a?.b`, `a ?? b`
+    // The matching `:` is the first at this depth that is not another ternary's.
+    let inner = 0
+    let q2 = null
+    for (let j = i + 1; j < expr.length; j++) {
+      const d = expr[j]
+      if (q2) {
+        if (d === '\\') j++
+        else if (d === q2) q2 = null
+        continue
+      }
+      if (d === "'" || d === '"' || d === '`') { q2 = d; continue }
+      if (d === '(' || d === '[' || d === '{') { depth++; continue }
+      if (d === ')' || d === ']' || d === '}') { depth--; continue }
+      if (depth !== 0) continue
+      if (d === '?' && expr[j + 1] !== '.' && expr[j + 1] !== '?') { inner++; continue }
+      if (d !== ':') continue
+      if (inner > 0) { inner--; continue }
+      return [expr.slice(i + 1, j).trim(), expr.slice(j + 1).trim()]
+    }
+    return null
+  }
+  return null
+}
+
 function resolveTopicExpr(repo, raw) {
   let expr = stripCasts(String(raw ?? ''))
   const inner = unwrapSubstitution(expr)
   if (inner !== null) expr = stripCasts(inner)
-  if (expr === '') return { topic: null, expr }
+  if (expr === '') return { topic: null, topics: [], expr }
   // All three of JavaScript's quote styles. The scan this replaced saw one of them, and direction 4
   // learned in the same file what that costs. A template literal carrying a substitution cannot
   // match the character class, which is the right answer: `${x}.bot.paused` is a shape, not a name.
   const literal = QUOTED_TOPIC.exec(expr)
-  if (literal) return { topic: literal[2], expr }
-  if (/^[A-Za-z_$][\w$]*$/.test(expr)) return { topic: resolveIdentifier(repo, expr), expr }
+  if (literal) return { topic: literal[2], topics: [literal[2]], expr }
+  if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
+    const one = resolveIdentifier(repo, expr)
+    return { topic: one, topics: one ? [one] : [], expr }
+  }
   const member = expr.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/)
-  if (member) return { topic: resolveMember(repo, member[1], member[2]), expr }
-  return { topic: null, expr }
+  if (member) {
+    const one = resolveMember(repo, member[1], member[2])
+    return { topic: one, topics: one ? [one] : [], expr }
+  }
+  const arms = splitTernary(expr)
+  if (arms) {
+    // Recursive, so `a ? X : b ? Y : Z` resolves to three, and so that each arm gets the cast
+    // stripping and identifier resolution the single case gets. Either arm failing fails both.
+    const left = resolveTopicExpr(repo, arms[0])
+    const right = resolveTopicExpr(repo, arms[1])
+    if (left.topics.length > 0 && right.topics.length > 0) {
+      const both = [...new Set([...left.topics, ...right.topics])]
+      return { topic: both[0], topics: both, expr }
+    }
+  }
+  return { topic: null, topics: [], expr }
 }
 
 /** topic -> [{ where, file, offset }], for every topic this repository actually puts on the bus. */
@@ -407,7 +588,7 @@ function emitsOf(repo) {
       const at = m.index + m[0].length
       // `envelope.topic as string` is the same expression as `envelope.topic`; the cast is TypeScript
       // talking to itself, and `resolveTopicExpr` takes it off.
-      const { topic, expr } = resolveTopicExpr(repo, valueAfter(file.text, at))
+      const { topic, topics, expr } = resolveTopicExpr(repo, valueAfter(file.text, at))
       const where = `${file.path}:${lineOf(file.text, m.index)}`
       if (expr === '' || TYPE_POSITION.test(expr)) continue
       if (!topic) {
@@ -417,12 +598,20 @@ function emitsOf(repo) {
         )
         continue
       }
-      if (!TOPIC_SHAPE.test(topic)) {
-        errors.push(`${where}: emits '${topic}', which is not a legal topic name (contracts-events TOPIC_PATTERN)`)
+      // `topics` rather than `topic`: one `topic:` property can carry a ternary and put TWO names
+      // on the bus. Every one of them is checked for shape and every one is recorded, because a
+      // half-recorded ternary is a set that looks complete.
+      const illegal = topics.filter((t) => !TOPIC_SHAPE.test(t))
+      if (illegal.length > 0) {
+        errors.push(
+          `${where}: emits ${illegal.map((t) => `'${t}'`).join(' and ')}, which is not a legal topic name (contracts-events TOPIC_PATTERN)`,
+        )
         continue
       }
-      if (!out.has(topic)) out.set(topic, [])
-      out.get(topic).push({ where, file: file.path, offset: m.index })
+      for (const name of topics) {
+        if (!out.has(name)) out.set(name, [])
+        out.get(name).push({ where, file: file.path, offset: m.index })
+      }
     }
 
     // ── the second emit shape, and the reason this is a derivation rather than a grep ──
@@ -438,7 +627,7 @@ function emitsOf(repo) {
         errors.push(`${where}: ${write.error}`)
         continue
       }
-      const { topic, expr } = resolveTopicExpr(repo, write.expr)
+      const { topic, topics, expr } = resolveTopicExpr(repo, write.expr)
       if (!topic) {
         // `${event.topic}` — the outbox helper every service shares, writing whatever it was handed.
         // The same judgement as RUNTIME_TOPIC at a `topic:` property, made by the same test rather
@@ -452,14 +641,17 @@ function emitsOf(repo) {
       // Asked here for the same reason it is asked of a `topic:` property, and it was not: a raw
       // insert of 'foo.bar' used to be silently admitted to the emitted set as a topic no registry
       // could ever name.
-      if (!TOPIC_SHAPE.test(topic)) {
+      const badRow = topics.filter((t) => !TOPIC_SHAPE.test(t))
+      if (badRow.length > 0) {
         errors.push(
-          `${where}: writes an outbox row for '${topic}', which is not a legal topic name (contracts-events TOPIC_PATTERN)`,
+          `${where}: writes an outbox row for ${badRow.map((t) => `'${t}'`).join(' and ')}, which is not a legal topic name (contracts-events TOPIC_PATTERN)`,
         )
         continue
       }
-      if (!out.has(topic)) out.set(topic, [])
-      out.get(topic).push({ where, file: file.path, offset: write.at })
+      for (const name of topics) {
+        if (!out.has(name)) out.set(name, [])
+        out.get(name).push({ where, file: file.path, offset: write.at })
+      }
     }
   }
   return out
