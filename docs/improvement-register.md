@@ -84,7 +84,7 @@ it is — and two are GDPR obligations rather than preferences.
 |---|---|---|---|
 | [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25 — ledger + alert **shipped**; the indexer half remains | 1d |
 | [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
-| [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | Shared identity delivers events to mainnet only — testnet never hears `identity.user.deleted` | 1.5d |
+| [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | **No erasure handler reaches more than one database** — 191 rows naming a person sit in seven testnet databases | 2d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
 | [#443](https://github.com/cloudsforge-online/micro-org/issues/443) | non-func | The conformance runner borrows the monitor's journey account | 1d |
 | [#503](https://github.com/cloudsforge-online/micro-org/issues/503) | functional | Testnet EMBER frozen since 2026-08-15, constant reconciliation drift | 2d |
@@ -198,6 +198,15 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #474 re-measured, and the consolidation changed its shape rather than
+  fixing it. The mechanism it describes — subscription URLs resolving only inside the mainnet
+  compose network — is gone. What replaced it is the same defect one layer down: **not one
+  erasure handler in the estate reaches more than one database**, because they run on
+  `ctx.sql` and an inbound event carries no `CF-Network` header, so it resolves to the
+  `singleNetwork` fallback. Seven testnet databases hold **191 rows** naming a person that no
+  erasure can reach. Fixed for worlds in micro-worlds#21 — including the handler I had merged
+  an hour earlier, which had the same fault. `networkSql.each` was already the right
+  primitive and was simply unused on this path.
 - **2026-09-01** — #491 closed (micro-worlds#20, micro-deploy#289): an erasure handler with a
   table-by-table matrix and the lawful basis for each retained row, plus the register row
   without which it would have been correct and unreachable — identity had ten subscriptions
