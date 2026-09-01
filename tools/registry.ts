@@ -945,13 +945,23 @@ export const REGISTRY: readonly Repo[] = [
   // survive a restart, a notification that must not become an email nobody asked for — is server
   // work, and 41 §4 makes each of them a test rather than an intention.
   //
-  // `owns` names the refusals rather than the features, because `cfctl list` prints this string and
-  // a one-line description of a social network that says "posts, replies, follows" describes forty
-  // other products. What is actually distinctive here is what it will not do: there is no ranked
-  // feed, and nothing counts an audience in public. Both are enforced (41 §4.1, §4.2), and a reader
-  // deciding whether this row is the thing they are looking for is better served by the constraint
-  // than by the feature list.
-  service('agora', '41', 'Forge Agora: voices, posts, replies, quotes, echoes, sparks, follows, circles, tags, whispers, notifications and moderation. Reverse-chronological only — no ranked feed, and no audience count is ever public'),
+  // ── THIS ROW IS THE PROCESS, NOT THE PRODUCT, AND IT STOPPED BEING BOTH AT M5d ──────────────
+  //
+  // What stood here described Forge Agora — the social network — because until the merge waves
+  // this row WAS that service. It now names the container that runs TWENTY-TWO absorbed modules
+  // beside it: identity's console, the wallet, the ledger's callers, four game titles, the
+  // developer portal, the market, billing, mint, foresight, telemetry and the bus tail. Every
+  // `absorbed(…, 'agora')` row above points here.
+  //
+  // `cfctl list` prints this string, so a description of one module is a description that is
+  // wrong about the other twenty-two — and it is wrong in the direction that matters, because a
+  // reader deciding what a `agora` outage takes down would conclude "the social network".
+  //
+  // The social product's own description lives on `agora-web` below, unchanged: that row IS the
+  // product and nothing else. The naming collision between the two is real and is NOT resolved by
+  // renaming this row — see `micro-deploy` `docs/service-merge-plan.md`, M5f, which measures what
+  // a rename would cost and declines it.
+  service('agora', '41', 'The platform tier: ONE process, twenty-three modules — every service in the estate that does not hold signing keys, posting authority or the right to issue a token. Forge Agora the social network is one of them. An outage here is most of the product surface at once, which is the trade the merge waves made deliberately and measured before making'),
   web('agora-web', '41', 'Forge Agora: the public square. Composing, reading and moderating conversation on one account, with an explicit control to load more rather than a feed that never ends'),
 
   // -- kept exactly as they are. NEVER managed, and now never managEABLE. -----------------------
