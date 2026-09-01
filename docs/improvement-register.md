@@ -193,6 +193,13 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — #532's engineering half shipped as micro-deploy#286:
+  `BACKUP_MINER_EXPECTED_ADDRESS`, which refuses rather than writing, so the existing
+  `MinerCoinbaseKeyUnbacked` alert becomes true instead of staying silent. Left
+  **unconfigured on purpose** — both possible values change behaviour and choosing which
+  key the estate leaves uncovered is the owner's call. Also found: **the k8s VM has not
+  mined since 2026-08-10**, so the key being backed up daily is not merely the wrong one,
+  it is a dormant one, while the host that is actually mining has no coverage.
 - **2026-09-01** — **#532 filed and banded top of P0.** The daily `miner-coinbase-mainnet`
   artefact has been encrypting the k8s VM's miner key, not the chain host's, across at
   least 17 sets; the chain host's key holds 112,011 EMBER and is in no backup at all.
