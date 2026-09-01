@@ -825,8 +825,19 @@ jobs:
           set -uo pipefail
           registry="${ESTATE}/contracts/packages/events/src/index.ts"
           emitter="${ESTATE}/identity/src/__estate_ci_outbox_canary.ts"
-          record="${ESTATE}/notify/src/__estate_ci_outbox_record_canary.ts"
-          if [ ! -f "$registry" ] || [ ! -d "${ESTATE}/identity/src" ] || [ ! -d "${ESTATE}/notify/src" ]; then
+          # ASKED, NOT ASSUMED. `notify` was absorbed into `agora` and its sources now live at
+          # `agora/src/activity/notify`, so a record planted in `notify/src` sits in a directory the
+          # checker no longer reads — and the canary then reports that the checker has stopped
+          # resolving raw-insert emits, which accuses the wrong thing. `--where` prints the directory
+          # the checker itself reads a service from, so this follows the estate rather than a path
+          # that was true in August. It is FATAL if it cannot answer.
+          if ! notify_src=$(node "${TOOLS}/tools/estate-topics.mjs" "$ESTATE" --where notify); then
+            echo "::error::estate-topics cannot say where it reads micro-notify from — the canary cannot be planted"
+            exit 1
+          fi
+          record="${notify_src}/__estate_ci_outbox_record_canary.ts"
+          echo "planting the record in ${notify_src}"
+          if [ ! -f "$registry" ] || [ ! -d "${ESTATE}/identity/src" ] || [ ! -d "$notify_src" ]; then
             echo "::error::the events registry, micro-identity or micro-notify is missing from this checkout — the canary cannot be planted"
             exit 1
           fi
