@@ -22,7 +22,7 @@ worse for P3, where several items are gated on a decision rather than on work.
 
 | band | items | days |
 |---|---|---|
-| P0 · live exposure | 6 | ~10 + 2 decisions |
+| P0 · live exposure | 7 | ~12 + 2 decisions |
 | P1 · controls that do not work | 13 | ~16 |
 | P2 · cost paid repeatedly | 12 | ~15 |
 | P3 · capability and unfinished product | 23 | ~103 |
@@ -34,6 +34,17 @@ worse for P3, where several items are gated on a decision rather than on work.
 Secrets that are out, keys concentrated where one compromise takes the money, and the
 legal question that decides whether the custody product may exist at all. Every one is
 worse tomorrow than today, and two are not engineering.
+
+**Working this band turned up a defect nobody had filed, and it is now the worst item in
+it.** The backup runner writes an artefact called `miner-coinbase-mainnet` every day and
+records it as written. It contains a *different key on a different host* — the estate has
+two EMBER miners, the runner can only see the cluster's, and it encrypts what it finds
+under the name of what it was asked for. The chain host's coinbase holds **112,011
+EMBER**, is also multisig owner #1 and the EOA holding the Forge Exchange LP tokens, and
+exists only as two files on one machine while the backup reports success. That is
+[#532](https://github.com/cloudsforge-online/micro-org/issues/532), and it is the second
+time this exact artefact has silently backed up nothing useful — `run.ts` carries a
+comment about the first.
 
 **Three of the nine closed on 2026-09-01 without a line of the work they asked for** —
 #423, #510 and #508. All three described a pre-consolidation estate, and the
@@ -52,7 +63,8 @@ user's own exported phrase stops finding their addresses.
 | [#161](https://github.com/cloudsforge-online/micro-org/issues/161) | owner · non-func | Whether the platform may lawfully custody third-party crypto-assets at all | — | open |
 | #209 (task) | owner · non-func | Revoke the exposed Azure Foundry key | 0.5d | open |
 | [#473](https://github.com/cloudsforge-online/micro-org/issues/473) | non-func | The mainnet multisig's three keys all live on the chain host | 3d | open |
-| [#206](https://github.com/cloudsforge-online/micro-org/issues/206) | non-func | Miner coinbase keys plaintext on disk, controlling 9,332 EMBER | 2d | open |
+| [#532](https://github.com/cloudsforge-online/micro-org/issues/532) | non-func | The daily backup named `miner-coinbase-mainnet` holds the **other host's** key — 112,011 EMBER is unbacked and the run goes green | 2d | **filed 2026-09-01** |
+| [#206](https://github.com/cloudsforge-online/micro-org/issues/206) | non-func | Miner coinbase keys plaintext on disk — now 112,011 EMBER, not 9,332; confidentiality half closed, durability half is #532 | 0.5d | open |
 | #210 (task) | non-func | Rotate the mainnet outbox and ingest secrets | 2d | open |
 
 ## P1 — Controls that do not work
@@ -127,13 +139,18 @@ way.
 
 1. **The two owner-only P0 items**, because they cost minutes and are accruing: revoke
    the Azure key (#209), and start the counsel conversation on #161.
-2. **The key-concentration block** — now **#473 and #206** alone, the other three having
-   closed on 2026-09-01. Both are about where a key physically lives rather than about
-   the database, so they no longer share a deploy with anything and can go independently.
-3. **#25 item 3**, which is now an availability problem rather than a confidentiality
+2. **#532 first**, ahead of everything else in P0. It is the only item where the estate is
+   actively reporting a safety net as working while it is not, over the single largest
+   money-bearing key it owns. Everything else in this band is a risk; this one is a risk
+   plus a false reassurance, and the false reassurance is what stops it being noticed.
+3. **The key-concentration remainder** — **#473 and #206**, the other three having closed
+   on 2026-09-01. Both are now decisions about where a key is allowed to physically live,
+   not engineering, and #473 should be decided knowing that two of the three multisig
+   owners are live miner coinbases holding real balances.
+4. **#25 item 3**, which is now an availability problem rather than a confidentiality
    one, and needs a design decision about *where* the keyring copy lives before any
    code is written.
-4. **P1, starting with #431.** Everything else in that band assumes the estate comes back
+5. **P1, starting with #431.** Everything else in that band assumes the estate comes back
    after a reboot, and nothing has proven it does.
 
 The consolidation is deliberately absent: it closed cleanly, and what it left behind is
@@ -176,6 +193,18 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-01** — **#532 filed and banded top of P0.** The daily `miner-coinbase-mainnet`
+  artefact has been encrypting the k8s VM's miner key, not the chain host's, across at
+  least 17 sets; the chain host's key holds 112,011 EMBER and is in no backup at all.
+  Found by checking `backup_artefacts.public_ref` against the address #206 names, rather
+  than by trusting either the issue or the green run.
+- **2026-09-01** — #206 re-estimated 2d → 0.5d and #473 re-scoped. #206's confidentiality
+  half is closed: the miner is pinned to `HEARTH_COINBASE_SOURCE=keystore`, so the
+  remaining plaintext is unread, and it was proven redundant by address comparison rather
+  than assumed. #473 confirmed on-chain (`required()=2`, all three owners current) and
+  widened: two of the three owners are live miner coinbases holding 112,011 and 19,641
+  EMBER, so the issue's "the wallet holds feeToSetter only" bounds the wallet but not the
+  keys.
 - **2026-09-01** — #423, #510 and #508 closed with evidence, none needing the work they
   asked for; the key-concentration block is now #473 and #206 alone. The defect found
   underneath them — one address-index counter shared across a seed's several derivation
