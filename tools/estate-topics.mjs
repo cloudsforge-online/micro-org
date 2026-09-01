@@ -68,8 +68,22 @@ import { join } from 'node:path'
 const [, , estate, gapsPath] = process.argv
 if (!estate) {
   console.error('usage: estate-topics.mjs <estate-dir> [gaps.json]')
+  console.error('       estate-topics.mjs <estate-dir> --where <service>')
   process.exit(2)
 }
+/**
+ * `--where <service>` — print the directory this checker READS that service from, and exit.
+ *
+ * For the canaries in estate-ci, and it exists because one of them broke. The outbox canary planted
+ * a record in `notify/src`, `notify` had moved to `agora/src/activity/notify`, and the sweep
+ * correctly did not see a file in a directory it no longer reads — so the canary reported that the
+ * checker had stopped resolving raw-insert emits, which was not true.
+ *
+ * A canary that hard-codes where the checker looks stops being a canary the day the layout moves,
+ * and it fails in the direction that costs the most: it accuses the checker. So the canary asks,
+ * rather than knowing. Nothing else uses this mode, and it prints ONE line so a shell can read it.
+ */
+const whereFlag = process.argv.indexOf('--where')
 
 const REGISTRY_FILE = join(estate, 'contracts/packages/events/src/index.ts')
 // Far below the 41 the registry holds today and far above any parse that has half broken. The same
@@ -282,6 +296,22 @@ const ABSORPTION = (() => {
   return out
 })()
 
+if (whereFlag !== -1) {
+  const service = process.argv[whereFlag + 1]
+  if (!service) {
+    console.error('--where needs a service name')
+    process.exit(2)
+  }
+  const moved = ABSORPTION.get(service)
+  const dir = moved ? moved.dir : join(estate, service, 'src')
+  if (!existsSync(dir)) {
+    console.error(`estate-topics: ${service} has no sources at ${dir}`)
+    process.exit(1)
+  }
+  console.log(dir)
+  process.exit(0)
+}
+
 const repos = readdirSync(estate).filter((d) => {
   try {
     return statSync(join(estate, d)).isDirectory()
@@ -310,13 +340,17 @@ for (const repo of repos) {
   // `estate-topic-gaps.json`, every message a person reads, and the cross-references in the issues
   // this file opens. A module's move is a fact about the deployment, not about the file's name.
   const base = moved ? moved.dir : join(estate, repo, 'src')
-  const isAbsorber = !moved && MODULE_DIRS.some((d) => d.startsWith(join(estate, repo) + '/'))
+  // Every module directory strictly BELOW this scan's base — which is not the same as "this repo is
+  // an absorber". `notify` sits at `agora/src/activity/notify`, so `activity` is a module that is
+  // itself an absorber, and a rule that only excluded from a top-level repository read notify's
+  // files twice: once as notify and once as activity. The canary caught exactly that.
+  const nested = MODULE_DIRS.filter((d) => d !== base && d.startsWith(base + '/'))
   sources.set(
     repo,
     collect(src)
       // The absorber's own scan stops at its modules' edges: they are read under their own names
       // above, and reading them twice is the double-count this whole block exists to remove.
-      .filter((path) => !(isAbsorber && MODULE_DIRS.some((d) => path.startsWith(d + '/'))))
+      .filter((path) => !nested.some((d) => path.startsWith(d + '/')))
       .map((path) => ({
       path: `${repo}/src/${path.slice(base.length + 1)}`,
       ...stripComments(readFileSync(path, 'utf8')),
