@@ -202,6 +202,51 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-02** — **#541 was not the app labelling a metric; it was a stale scrape list, and
+  the merge's own CNAMEs made the staleness green.** The kernel emits ONE unlabelled
+  `http_requests_total` and `merged.test.ts` forbids a `module=` label on it, so two of the
+  issue's three proposed fixes were solutions to a problem the process does not have. The
+  `service` label comes from the target — and the deployed target file held **twenty-one
+  entries pointing at the same agora pod**, because every absorbed service keeps an
+  ExternalName CNAME onto its absorber and a target aimed at one is `up`, fast, and returns
+  the absorber's page. The generated list was never wrong: rendered against 2026.8.109 it
+  emits **seven**. It had been rendered on 2026-08-19 and never refreshed, because
+  `release-deploy.sh` re-rendered the scrape list on every compose deploy and `k8s-deploy.sh`,
+  which replaced it, did not render it at all. Deploy now refreshes the telemetry plane from
+  the release it applies; `check-prometheus-target-aliases.py` refuses two targets that resolve
+  to one workload, reading the cluster and not the checkout. 28 service labels → 8 within a
+  minute. (micro-deploy#299, micro-org#541 closed)
+- **2026-09-02** — **#474 closed: every deletion request since the k8s migration erased the
+  mainnet rows and left the testnet ones.** The issue was filed about a routing problem that
+  the consolidation dissolved — there is no second estate to reach — but the property it
+  described was still true in a new form. `identity`'s relay sends no `CF-Network`, so every
+  handler's `ctx.sql` was the pod's own plane, and `agora` alone carries twenty-two
+  `*_DATABASE_URL_TESTNET` variables. Measured: 78 erasure events on mainnet, 24 on testnet,
+  **zero in common**, testnet stopping dead on 2026-08-19. Twelve ingest paths now sweep the
+  module's selector through `eraseEveryPlane`; four deliberately do not, because an audit row,
+  a sale and a feed entry belong to the estate they happened in and a person does not.
+  Repaired by clearing 1,616 delivery rows and 101 outbox rows so the relay re-sent everything:
+  **every registered service now holds all 101 events on both planes.** Three releases and
+  three replays, because the census found two more defects the code review had not.
+  (micro-agora#12/#14/#15, releases 2026.8.110–.112)
+- **2026-09-02** — **the replay found a service that was registered for erasure and had no
+  handler.** `worlds` is in `erasure/register.psv` as `mixed`, `check-erasure-register.py`
+  reported it `ok`, and micro-org#491 was closed as fixed. 101 deliveries succeeded, 0 failed,
+  and its inbox held **0** rows on both planes — every one took the `202 {status: 'ignored'}`
+  branch, which is the right answer for a topic a service is not subscribed to. A register row
+  is not a handler, and nothing compared the two. Its handler now exists, with the per-table
+  matrix beside the code: `reward_grants` is retained and anonymised because `journal_entry_id`
+  names a ledger posting and `seasons_within_budget` holds the sum of those rows.
+  (micro-org#543 closed, micro-agora#13)
+- **2026-09-02** — **three of eighteen register rows had no subscription at all**, and one
+  named a URL that resolves to a 410. `worlds` was subscribed at `http://worlds:4000/v1/events`
+  — a name that resolves, through the merge's CNAME, onto agora's deliberate tombstone for the
+  bare path — while `agora`, `worlds` and `analytics` had no row in
+  `identity.event_subscriptions` whatsoever. Two more were subscribed through alias names that
+  work until a CNAME is tidied away. Repaired live; the register is fixed; and
+  `check-erasure-subscriptions-live.py` now POSTs an unsigned body to every subscription URL
+  and refuses a 404/405/410 — a check that cannot live in CI, because whether a URL is answered
+  by a handler or by a tombstone is a property of the running process. (micro-deploy#300)
 - **2026-09-02** — **#539 closed, and the cause was a layer below the probes.** The eleven alerts
   were stale probe rows, but the reason they were stale is that the seeder that writes them
   *cannot run on the node*: `contracts`, `ui` and `agora` — three checkouts
