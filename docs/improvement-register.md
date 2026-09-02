@@ -83,7 +83,7 @@ it is — and two are GDPR obligations rather than preferences.
 | ref | class | item | est |
 |---|---|---|---|
 | [#533](https://github.com/cloudsforge-online/micro-org/issues/533) | non-func | Testnet reconciliation stopped on 2026-08-25 — ledger + alert **shipped**; the indexer half remains | 1d |
-| [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | Six services still store a person and are neither registered for erasure nor exempt | 4d |
+| [#534](https://github.com/cloudsforge-online/micro-org/issues/534) | functional | ~~Six services still store a person and are neither registered for erasure nor exempt~~ — **closed 2026-09-02**: all six shipped, and `check-erasure-register.py` reports 24 of 24 | done |
 | [#474](https://github.com/cloudsforge-online/micro-org/issues/474) | functional | **No erasure handler reaches more than one database** — 191 rows naming a person sit in seven testnet databases | 2d |
 | [#517](https://github.com/cloudsforge-online/micro-org/issues/517) | non-func | The restore drill reports a mismatch on a healthy run | 1d |
 | [micro-agora#11](https://github.com/cloudsforge-online/micro-agora/pull/11) | functional | **A GDPR erasure has been failing for everyone who owns a Homestead** — eight events retrying continuously since at least 2026-08; the person asked to be erased and was not being. **Fixed** (micro-agora#11) | done |
@@ -233,12 +233,53 @@ defect described may survive a re-architecture; the fix almost never does.
   did. `positions.staker` is deliberately not erased — it is a chain address mirrored from Hearth,
   public whatever this database says, and not a subject the estate assigned.
   (micro-agora#17/#18, micro-deploy#306/#307, release 2026.8.114)
-- **2026-09-02, later** — the four services still failing `check-erasure-register.py` are the four
-  micro-org#534 said need a decision rather than code: `wallet`, `ledger`, `custody`, `pool`. The
-  fan-out makes `wallet` cheap to wire once the decision exists, and the decision is one question
-  for all four — **what does the estate do with a balance, a deposit address, a key and a payout
-  owed to a person who has asked to be forgotten?** It is upstream of every schema involved and is
-  worth answering once rather than four times in four handlers.
+- **2026-09-02, last** — **the owner answered the question, and #534 closes.** The four services
+  still failing `check-erasure-register.py` were the four micro-org#534 said needed a decision
+  rather than code: `wallet`, `ledger`, `custody`, `pool`. The question was one question for all
+  four — *what does the estate do with a balance, a deposit address, a key and a payout owed to a
+  person who has asked to be forgotten?* The answer, in the owner's words: **when a person needs
+  to forget, everything will be anonymised.** It is recorded in full in the header of
+  `deploy/erasure/register.psv`, together with the clause that keeps the already-shipped
+  delete-based handlers legal: deletion stays available where it leaves LESS behind than
+  anonymisation would, because it is then the strictly stronger form of the same outcome. Free
+  text the person wrote is neutralised as well as the identifier.
+
+  Three of the four anonymise and one deletes, and **each handler argues its own case in its own
+  file** rather than deferring to the register:
+
+  * `ledger` — a journal you can delete a party out of is not a record. Delete an account and every
+    posting referencing it is a debit with no counterpart. `accounts.subject` is the only column
+    here that names a person, so ONE UPDATE covers the service, and `erasure.test.ts` asserts that
+    from `information_schema` rather than trusting the reading — a migration that denormalises the
+    subject for a reporting query turns the test red instead of leaking quietly.
+  * `custody` — the row is half of a key controlling money on a public chain and the other half is
+    the chain, which nobody can edit. Deleting it destroys the only route back to an address that
+    still holds coins. **The status column is deliberately untouched**, and that is the subtle
+    part: `gates.ts` refuses to sign for a non-active key, so retiring a departed person's deposit
+    address would not stop deposits — it would stop the estate MOVING what arrives. Anonymising
+    strands the identity; retiring would strand the money.
+  * `wallet` — the same argument one level up, and the cheapest of the four to deliver: no route,
+    no subscription row, no secret, no deploy provisioning. It joins studio and foresight as an
+    `InboundSink` on the square's existing webhook, on the ONE KEY, NOT THREE condition.
+  * `pool` — DELETES. `pool_account_links` is the only place a person appears — migration 3
+    refused to put a nullable `user_id` on `pool_workers` precisely so it would stay that way —
+    and anonymising would leave `erased:<uuid> -> <account>`, a row whose only content is that
+    somebody who no longer exists mined under that label. Deleting also lands on a path
+    `payouts.ts` already handles: null from `userForAccount` is its NORMAL answer, because most
+    pool accounts are a firmware miner's own payout address with no estate user at all.
+
+  **The catalogue sweep found what a reading of the schema would not**, for the second time in two
+  days: `wallet.idempotency_keys.key` is `<userId>:<route>:<clientKey>` — the person embedded
+  verbatim in a text PRIMARY KEY — and `custody_keys.idempotency_key` is caller-supplied text with
+  no defined shape at all. Both handlers' tests now walk `information_schema` and sweep every
+  text, jsonb and uuid column for the raw id.
+
+  Two limits are **recorded rather than papered over**: nothing settles a departing person's
+  balance before the identifier goes, and a firmware miner's payout address cannot be erased on
+  this event because nothing links it to a user id. A handler that refused the erasure until the
+  balance was zero would be an erasure that never completes, which is the failure this whole
+  subscription exists to end.
+  (micro-ledger#28, micro-custody#22, micro-pool#33, micro-agora#19, micro-deploy#309)
 - **2026-09-02** — **#541 was not the app labelling a metric; it was a stale scrape list, and
   the merge's own CNAMEs made the staleness green.** The kernel emits ONE unlabelled
   `http_requests_total` and `merged.test.ts` forbids a `module=` label on it, so two of the
