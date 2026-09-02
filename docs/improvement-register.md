@@ -202,6 +202,43 @@ defect described may survive a re-architecture; the fix almost never does.
 ## Changelog
 
 - **2026-09-01** — compiled.
+- **2026-09-02, later** — **the merge dropped a compliance handler, and the checker was reading the
+  copy that still had it.** `worlds/src/erasure.ts` was written for micro-org#491, reviewed, and
+  corrected on 2026-09-01 — that day's commit fixes a leak of the user id into
+  `reward_grants.idempotency_key`. Commit `078e799` then copied **twenty-seven** files out of
+  `worlds/src` into `agora/src/worlds/` and copied neither `erasure.ts` nor `erasure.test.ts`.
+  `check-erasure-register.py` globs every service's `src/migrations.ts` under the estate root, so
+  it reads the STANDALONE checkout, which still has the handler; the register said worlds erases,
+  the standalone code did erase, and the running module 202-ignored 101 delivered erasure events.
+  I then wrote a second handler and **reproduced the exact leak the first one had already fixed**
+  — the cost of the dropped file, stated precisely. Both files restored verbatim;
+  `check-absorption-carried-every-file.py` compares every absorbed module against its own
+  checkout, with a `--self-test` that builds a fixture with one file left behind and asserts the
+  check fails on it. Twenty-two absorbed services, all now carrying every file.
+  (micro-org#543, micro-deploy#304, micro-agora#16, release 2026.8.113)
+- **2026-09-02, later** — **#534: six services with no erasure handler become four, and the
+  expensive half of the issue turned out not to exist.** `agora/src/server.ts` already recorded
+  the condition under which one webhook may serve several modules — ONE KEY, NOT THREE — and
+  `agora`, `studio`, `foresight` and `wallet` all verify with the estate-wide
+  `OUTBOX_SIGNING_SECRET`, exactly as the three titles do behind emberkin's fan-out. So studio and
+  foresight needed **no new route, no new ingest secret, no deploy provisioning and no fourth
+  subscription row**: the square's webhook verifies once and fans out, and `InboundSink` moved to
+  the process root because a host importing a type from one of its modules is the layering
+  inverted. Both handlers sweep every plane from their own selector, from their first line.
+  studio DELETES everything, including the row that looks financial and is not — `credit_accounts`
+  is a spending cap, nobody is owed the remainder, no ledger entry references it, which is exactly
+  what separates it from `billing`. foresight RETAINS and narrows, and needed **migration 14**
+  first: `custodial_stakes_money_is_immutable` refused any change of `subject`, which is the
+  second time in two days a trigger has blocked an erasure the same way tessera's Homestead guard
+  did. `positions.staker` is deliberately not erased — it is a chain address mirrored from Hearth,
+  public whatever this database says, and not a subject the estate assigned.
+  (micro-agora#17/#18, micro-deploy#306/#307, release 2026.8.114)
+- **2026-09-02, later** — the four services still failing `check-erasure-register.py` are the four
+  micro-org#534 said need a decision rather than code: `wallet`, `ledger`, `custody`, `pool`. The
+  fan-out makes `wallet` cheap to wire once the decision exists, and the decision is one question
+  for all four — **what does the estate do with a balance, a deposit address, a key and a payout
+  owed to a person who has asked to be forgotten?** It is upstream of every schema involved and is
+  worth answering once rather than four times in four handlers.
 - **2026-09-02** — **#541 was not the app labelling a metric; it was a stale scrape list, and
   the merge's own CNAMEs made the staleness green.** The kernel emits ONE unlabelled
   `http_requests_total` and `merged.test.ts` forbids a `module=` label on it, so two of the
